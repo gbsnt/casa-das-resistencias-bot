@@ -7,6 +7,16 @@ export async function POST(req) {
     const { messages, language, provider = 'groq' } = await req.json();
     const ultimaMensagem = messages[messages.length - 1].content;
 
+    // =========================================================================
+    // --- DETECTOR DE MENTIRAS (DEBUG DE VARIÁVEIS DE AMBIENTE) ---
+    // =========================================================================
+    if (!process.env.PINECONE_API_KEY) {
+      return NextResponse.json({ 
+        error: `A Vercel cortou a chave do Pinecone! Status no servidor: GROQ: ${!!process.env.GROQ_API_KEY} | GEMINI: ${!!process.env.GEMINI_API_KEY} | PINECONE: ${!!process.env.PINECONE_API_KEY}` 
+      }, { status: 500 });
+    }
+    // =========================================================================
+
     // 1. Conectar ao Pinecone e ao Gemini (para criar o vetor/embedding)
     const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
     const index = pc.index('catalogo-resistencias');
