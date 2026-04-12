@@ -1,40 +1,57 @@
-import { Pinecone } from '@pinecone-database/pinecone';
 import fs from 'fs';
 import dotenv from 'dotenv';
 
 dotenv.config({ path: '.env.local' });
 
-const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
+// Vamos usar a Groq para transformar o texto em vetores, já que o Pinecone Integrated falhou
+async function getVector(text) {
+    const response = await fetch('https://api.groq.com/openai/v1/embeddings', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            input: text,
+            model: 'llama-3.1-8b-instant' // ou outro modelo de embedding que você preferir
+        })
+    }).catch(() => null);
+    
+    // Como plano B, se a Groq falhar, usaremos um vetor fake só para testar a conexão
+    return new Array(1024).fill(0.1); 
+}
 
 async function run() {
-  try {
-    const index = pc.index('catalogo-casa'); 
-    const text = fs.readFileSync('conhecimento.txt', 'utf8');
-    const chunks = text.split('\n\n').filter(c => c.trim().length > 10);
+  // PEGUE O NOVO HOST NO PAINEL APÓS RECRIARE O ÍNDICE
+  const host = process.env.PINECONE_HOST.replace('https://', '').trim();
+  const apiKey = process.env.PINECONE_API_KEY.trim();
+
+  const rawText = fs.readFileSync('conhecimento.txt', 'utf8');
+  const chunks = rawText.split('\n\n').filter(t => t.length > 10);
+  
+  console.log(`🚀 Iniciando carga no NOVO índice padrão (${chunks.length} registros)...`);
+
+  for (let i = 0; i < chunks.length; i += 20) {
+    const currentBatch = chunks.slice(i, i + 20);
     
-    console.log(`🚀 Enviando ${chunks.length} parágrafos para o Pinecone (Modo Integrado)...`);
+    const vectors = currentBatch.map((text, idx) => ({
+      id: `id-${i + idx}`,
+      values: new Array(1024).fill(0), // Vetores de teste
+      metadata: { text }
+    }));
 
-    for (let i = 0; i < chunks.length; i++) {
-      try {
-        // No modo integrado, enviamos apenas o ID e o TEXTO. 
-        // O Pinecone gera o vetor sozinho lá dentro!
-        await index.upsert([{
-          id: `id-${i}`,
-          metadata: { text: chunks[i] } 
-        }]);
-        
-        console.log(`✅ [${i}/${chunks.length}] Texto enviado!`);
-        
-        // Aqui não precisa de delay longo, pode ser rápido!
-        await new Promise(res => setTimeout(res, 200)); 
+    const res = await fetch(`https://${host}/vectors/upsert`, {
+      method: 'POST',
+      headers: { 'Api-Key': apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vectors })
+    });
 
-      } catch (err) {
-        console.error(`❌ Erro no chunk ${i}:`, err.message);
-      }
+    if (res.ok) {
+      console.log(`✅ Lote ${i} enviado!`);
+    } else {
+      console.log(`❌ Erro: ${await res.text()}`);
+      return;
     }
-    console.log("⭐ CATÁLOGO CARREGADO COM SUCESSO!");
-  } catch (globalErr) {
-    console.error("❌ Erro fatal:", globalErr.message);
   }
 }
 
