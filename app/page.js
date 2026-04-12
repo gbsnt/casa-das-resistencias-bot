@@ -1,231 +1,155 @@
-'use client';
-import { useState, useEffect, useRef } from 'react';
-import ReactMarkdown from 'react-markdown';
+"use client";
 
-export default function Chat() {
-  const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [language, setLanguage] = useState('Português');
-  const [provider, setProvider] = useState('groq'); 
-  const [modelUsado, setModelUsado] = useState('');
+import { useState, useRef, useEffect } from "react";
+import { Send, Bot, User, Flame, Loader2 } from "lucide-react";
+
+export default function ChatPage() {
+  const [messages, setMessages] = useState([
+    {
+      role: "assistant",
+      content: "Olá! Sou o especialista técnico da Casa das Resistências. Como posso ajudar no seu projeto hoje?",
+    },
+  ]);
+  const [input, setInput] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef(null);
 
+  // Faz o scroll descer automaticamente
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
-  useEffect(() => { scrollToBottom(); }, [messages, loading]);
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, isLoading]);
 
   const sendMessage = async (e) => {
     e.preventDefault();
-    if (!input.trim() || loading) return;
+    if (!input.trim()) return;
 
-    const userMsg = { role: 'user', content: input };
-    setMessages(prev => [...prev, userMsg]);
-    setInput('');
-    setLoading(true);
-    setModelUsado('');
+    const newMessages = [...messages, { role: "user", content: input }];
+    setMessages(newMessages);
+    setInput("");
+    setIsLoading(true);
 
     try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [...messages, userMsg], language, provider }),
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: newMessages }),
       });
 
       const data = await response.json();
-      if (!response.ok) {
-        setMessages(prev => [...prev, { role: 'assistant', content: '⚠️ ' + data.error }]);
-      } else {
-        setModelUsado(data.model_usado || '');
-        setMessages(prev => [...prev, { role: 'assistant', content: data.content }]);
-      }
-    } catch (err) {
-      setMessages(prev => [...prev, { role: 'assistant', content: '❌ Erro de conexão.' }]);
+      setMessages((prev) => [...prev, { role: "assistant", content: data.content }]);
+    } catch (error) {
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: "Desculpe, tive um erro de conexão. Pode tentar novamente?" },
+      ]);
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
   return (
-    <div className="background">
-      <div className="container">
-        <header className="header">
-          <div className="logoArea">
-            <div className="statusDot"></div>
-            <div>
-              <h1 className="title">Casa das Resistências</h1>
-              <span className="subtitle">Suporte Técnico Especializado</span>
-            </div>
+    <div className="flex flex-col h-screen bg-zinc-50 text-zinc-900 font-sans">
+      {/* HEADER PREMIUM */}
+      <header className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 bg-white/80 backdrop-blur-md border-b border-zinc-200 shadow-sm">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-orange-100 rounded-lg">
+            <Flame className="w-6 h-6 text-orange-600" />
           </div>
-        </header>
-
-        <div className="settingsBar">
-          <div className="selectors">
-            <select className="select" value={language} onChange={(e) => setLanguage(e.target.value)}>
-              <option value="Português">🇧🇷 PT</option>
-              <option value="English">🇺🇸 EN</option>
-              <option value="Español">🇪🇸 ES</option>
-            </select>
-            
-            <select className="select" value={provider} onChange={(e) => setProvider(e.target.value)}>
-              <option value="groq">🦙 Llama 3</option>
-              <option value="gemini">✨ Gemini</option>
-            </select>
+          <div>
+            <h1 className="text-xl font-bold tracking-tight text-zinc-800">
+              Casa das Resistências
+            </h1>
+            <p className="text-xs font-medium text-zinc-500 flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+              Suporte Técnico Especializado
+            </p>
           </div>
-          {modelUsado && <span className="modelBadge">IA: <strong>{modelUsado}</strong></span>}
         </div>
+      </header>
 
-        <main className="chatWindow">
-          {messages.length === 0 && (
-            <div className="emptyState">
-              <h2>Como posso ajudar?</h2>
-              <p>Descreva sua máquina ou aplicação técnica.</p>
-            </div>
-          )}
+      {/* ÁREA DE MENSAGENS */}
+      <main className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
+        <div className="max-w-3xl mx-auto space-y-6">
+          {messages.map((m, index) => (
+            <div
+              key={index}
+              className={`flex gap-4 ${m.role === "user" ? "justify-end" : "justify-start"}`}
+            >
+              {/* Ícone do Robô (se for assistant) */}
+              {m.role === "assistant" && (
+                <div className="w-8 h-8 rounded-full bg-zinc-200 flex items-center justify-center shrink-0 mt-1">
+                  <Bot className="w-5 h-5 text-zinc-600" />
+                </div>
+              )}
 
-          {messages.map((m, i) => (
-            <div key={i} className={m.role === 'user' ? 'userRow' : 'aiRow'}>
-              <div className={m.role === 'user' ? 'userBubble' : 'aiBubble'}>
-                <ReactMarkdown>{m.content}</ReactMarkdown>
+              {/* Balão de Mensagem */}
+              <div
+                className={`px-5 py-3.5 rounded-2xl max-w-[85%] sm:max-w-[75%] leading-relaxed shadow-sm ${
+                  m.role === "user"
+                    ? "bg-zinc-900 text-white rounded-tr-sm"
+                    : "bg-white border border-zinc-200 text-zinc-800 rounded-tl-sm"
+                }`}
+              >
+                <p className="whitespace-pre-wrap">{m.content}</p>
               </div>
+
+              {/* Ícone do Usuário (se for user) */}
+              {m.role === "user" && (
+                <div className="w-8 h-8 rounded-full bg-orange-500 flex items-center justify-center shrink-0 mt-1">
+                  <User className="w-5 h-5 text-white" />
+                </div>
+              )}
             </div>
           ))}
-          {loading && (
-            <div className="aiRow">
-              <div className="loadingBubble pulse">Processando catálogo...</div>
+
+          {/* Indicador de Digitação */}
+          {isLoading && (
+            <div className="flex gap-4 justify-start">
+              <div className="w-8 h-8 rounded-full bg-zinc-200 flex items-center justify-center shrink-0">
+                <Bot className="w-5 h-5 text-zinc-600" />
+              </div>
+              <div className="px-5 py-4 rounded-2xl bg-white border border-zinc-200 rounded-tl-sm flex items-center gap-2 shadow-sm">
+                <Loader2 className="w-4 h-4 text-zinc-400 animate-spin" />
+                <span className="text-sm text-zinc-500 font-medium">Consultando o catálogo...</span>
+              </div>
             </div>
           )}
           <div ref={messagesEndRef} />
-        </main>
+        </div>
+      </main>
 
-        <form onSubmit={sendMessage} className="inputArea">
-          <input
-            className="input"
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            placeholder="Dúvida técnica..."
-            disabled={loading}
-          />
-          <button className={loading ? 'btnOff' : 'btnOn'} type="submit" disabled={loading}>
-            {loading ? '⏳' : 'Enviar'}
-          </button>
-        </form>
-      </div>
-
-      <style jsx>{`
-        .background {
-          background-color: #eef2f6;
-          min-height: 100dvh; /* dvh evita bugs de altura no Chrome mobile */
-          display: flex;
-          justify-content: center;
-          align-items: center;
-          font-family: sans-serif;
-        }
-        .container {
-          display: flex;
-          flex-direction: column;
-          height: 100dvh;
-          width: 100%;
-          max-width: 800px;
-          background: white;
-          box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-        }
-        .header {
-          background: #0a2540;
-          color: white;
-          padding: 15px 20px;
-          border-bottom: 4px solid #ff6600;
-        }
-        .title { font-size: 18px; margin: 0; }
-        .subtitle { font-size: 11px; color: #a1b0cb; }
-        .statusDot { width: 10px; height: 10px; background: #2ecc71; border-radius: 50%; }
-        .logoArea { display: flex; align-items: center; gap: 12px; }
-
-        .settingsBar {
-          display: flex;
-          flex-wrap: wrap;
-          justify-content: space-between;
-          padding: 10px 20px;
-          background: #f8f9fa;
-          gap: 10px;
-          border-bottom: 1px solid #eee;
-        }
-        .selectors { display: flex; gap: 8px; }
-        .select { padding: 6px; border-radius: 6px; border: 1px solid #ccc; font-size: 12px; }
-        .modelBadge { font-size: 11px; color: #666; align-self: center; }
-
-        .chatWindow {
-          flex: 1;
-          overflow-y: auto;
-          padding: 20px;
-          display: flex;
-          flex-direction: column;
-          gap: 15px;
-          background: #fcfcfc;
-        }
-        .userRow { align-self: flex-end; max-width: 85%; }
-        .aiRow { align-self: flex-start; max-width: 90%; }
-        
-        .userBubble {
-          background: #ff6600;
-          color: white;
-          padding: 12px 16px;
-          border-radius: 18px 18px 2px 18px;
-          font-size: 14px;
-        }
-        .aiBubble {
-          background: white;
-          border: 1px solid #e5e7eb;
-          padding: 12px 16px;
-          border-radius: 18px 18px 18px 2px;
-          font-size: 14px;
-          line-height: 1.5;
-        }
-
-        .inputArea {
-          padding: 15px;
-          display: flex;
-          gap: 10px;
-          border-top: 1px solid #eee;
-        }
-        .input {
-          flex: 1;
-          padding: 12px 15px;
-          border-radius: 10px;
-          border: 1px solid #ddd;
-          font-size: 14px;
-          outline: none;
-        }
-        .btnOn {
-          background: #0a2540;
-          color: white;
-          border: none;
-          padding: 0 20px;
-          border-radius: 10px;
-          font-weight: bold;
-        }
-
-        @media (max-width: 600px) {
-          .container { height: 100dvh; border-radius: 0; }
-          .header { padding: 10px 15px; }
-          .title { font-size: 16px; }
-          .chatWindow { padding: 15px; }
-          .settingsBar { padding: 8px 15px; }
-          .inputArea { padding: 10px; }
-          .userBubble, .aiBubble { font-size: 13.5px; padding: 10px 14px; }
-          .btnOn { padding: 0 15px; }
-          .modelBadge { width: 100%; text-align: center; order: 3; }
-        }
-
-        @keyframes pulse {
-          0% { opacity: 0.5; }
-          50% { opacity: 1; }
-          100% { opacity: 0.5; }
-        }
-        .pulse { animation: pulse 1.5s infinite; }
-      `}</style>
+      {/* ÁREA DE INPUT (RODAPÉ) */}
+      <footer className="p-4 bg-white border-t border-zinc-200">
+        <div className="max-w-3xl mx-auto">
+          <form
+            onSubmit={sendMessage}
+            className="flex items-center gap-2 p-1.5 bg-zinc-100 rounded-full border border-zinc-200 focus-within:ring-2 focus-within:ring-zinc-900 focus-within:border-transparent transition-all shadow-sm"
+          >
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              disabled={isLoading}
+              placeholder="Pergunte sobre resistências, potência, dimensões..."
+              className="flex-1 bg-transparent px-4 py-3 outline-none text-zinc-800 placeholder-zinc-400 disabled:opacity-50"
+            />
+            <button
+              type="submit"
+              disabled={isLoading || !input.trim()}
+              className="bg-zinc-900 text-white p-3 rounded-full hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
+            >
+              <Send className="w-5 h-5" />
+            </button>
+          </form>
+          <p className="text-center text-xs text-zinc-400 mt-3">
+            O suporte com IA pode cometer erros. Verifique informações críticas com nossa equipe.
+          </p>
+        </div>
+      </footer>
     </div>
   );
 }
