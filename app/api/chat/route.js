@@ -1,19 +1,17 @@
 import { NextResponse } from 'next/server';
 import { Pinecone } from '@pinecone-database/pinecone';
-import { GoogleGenerativeAI } from '@google/generative-ai'; // Importamos o Gemini
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 export async function POST(req) {
   try {
     const { messages } = await req.json();
-    const historico = messages.slice(-3).map(m => m.content).join(' ');
+    const historicoParaBusca = messages.slice(-3).map(m => m.content).join(' ');
 
-    const apiKey = process.env.PINECONE_API_KEY.trim();
+    const apiKey = (process.env.PINECONE_API_KEY || "").trim();
     const pc = new Pinecone({ apiKey });
     const index = pc.index('catalogo-casa');
 
-    // ==========================================
-    // 1. EMBEDDING DA PERGUNTA (Pinecone IA)
-    // ==========================================
+    // 1. EMBEDDING
     const resIA = await fetch('https://api.pinecone.io/embed', {
       method: 'POST',
       headers: {
@@ -24,39 +22,31 @@ export async function POST(req) {
       body: JSON.stringify({
         model: 'multilingual-e5-large',
         parameters: { input_type: 'query', truncate: 'END' },
-        inputs: [{ text: historico }] 
+        inputs: [{ text: historicoParaBusca }] 
       })
     });
 
     const dataIA = await resIA.json();
-    if (!dataIA.data) throw new Error("Falha ao gerar vetor da pergunta.");
+    const queryVector = dataIA.data?.[0]?.values;
 
-    const queryVector = dataIA.data[0].values || dataIA.data[0].embedding;
+    // 2. BUSCA RAG
+    let contexto = "";
+    if (queryVector) {
+      const busca = await index.query({ vector: queryVector, topK: 3, includeMetadata: true });
+      contexto = busca.matches.map(match => match.metadata.text).join('\n---\n');
+    }
 
-    // ==========================================
-    // 2. BUSCA NO PINECONE (RAG)
-    // ==========================================
-    const busca = await index.query({
-      vector: queryVector,
-      topK: 3, // Contexto enxuto e preciso
-      includeMetadata: true
-    });
+    const systemPrompt = `Você é um Engenheiro de Aplicação da Casa das Resistências. 
+    Responda APENAS com base no contexto abaixo. Se não souber, direcione para o comercial. 
+    NUNCA invente preços ou modelos (ex: MTO-50).
+    
+    CONTEXTO:
+    ${contexto}`;
 
-    const contexto = busca.matches.map(match => match.metadata.text).join('\n---\n');
+    let respostaFinal = ""; // Variável declarada corretamente aqui no topo
 
-    const systemPrompt = `Você é o Suporte Técnico Especialista da Casa das Resistências.
-    REGRA 1: Responda SEMPRE com base neste CONTEXTO DO CATÁLOGO:
-    ${contexto || "Use seu conhecimento geral, mas avise que não localizou no catálogo."}
-    REGRA 2: Seja técnico, direto e não invente produtos que não estão no contexto.`;
-
-    let respostaFinal = "";
-
-    // ==========================================
-    // 3. ROTEAMENTO DE MODELOS (O FALLBACK)
-    // ==========================================
-
+    // 3. ROTEAMENTO (GROQ -> GEMINI)
     try {
-      // TENTATIVA 1: GROQ (Llama 3.1) - Mais rápido
       const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -65,54 +55,53 @@ export async function POST(req) {
         },
         body: JSON.stringify({
           model: "llama-3.1-8b-instant",
-          messages: [
-            { role: "system", content: systemPrompt },
-            ...messages.slice(-4)
-          ],
-          temperature: 0.15,
-          max_tokens: 1500
+          messages: [{ role: "system", content: systemPrompt }, ...messages.slice(-6)],
+          temperature: 0.1
         })
       });
 
       const groqData = await groqResponse.json();
-
-      // Se a Groq responder com aquele erro de limite (Rate Limit), nós forçamos o erro para cair no Catch
-      if (groqData.error) {
-        throw new Error(`Groq falhou: ${groqData.error.code || groqData.error.message}`);
-      }
-
+      if (groqData.error) throw new Error(groqData.error.message);
+      
       respostaFinal = groqData.choices[0].message.content;
 
     } catch (erroGroq) {
-      console.warn("⚠️ Groq fora do ar ou com limite excedido. Ativando Gemini... Motivo:", erroGroq.message);
+      console.warn("⚠️ Groq falhou, usando Gemini. Motivo:", erroGroq.message);
 
-      // TENTATIVA 2: GEMINI 1.5 FLASH (Google) - Super resiliente e com limites altíssimos
       const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
       const geminiModel = genAI.getGenerativeModel({ 
         model: "gemini-1.5-flash",
         systemInstruction: systemPrompt 
       });
 
-      // O Gemini exige que os papéis sejam 'user' e 'model' (não 'assistant')
-      const mensagensRecentes = messages.slice(-4);
-      const perguntaAtual = mensagensRecentes.pop().content; 
-      
-      const geminiHistory = mensagensRecentes.map(m => ({
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: m.content }]
-      }));
+      // FILTRO CRÍTICO: O Gemini exige que a primeira mensagem seja 'user'
+      let mensagensGemini = messages.slice(-6);
+      while (mensagensGemini.length > 0 && mensagensGemini[0].role !== 'user') {
+        mensagensGemini.shift();
+      }
 
-      const chat = geminiModel.startChat({ history: geminiHistory });
-      const result = await chat.sendMessage(perguntaAtual);
-      
-      respostaFinal = result.response.text();
+      if (mensagensGemini.length === 0) {
+        // Se não sobrou nada, mandamos apenas a última pergunta
+        const ultimaMsg = messages[messages.length - 1].content;
+        const result = await geminiModel.generateContent(ultimaMsg);
+        respostaFinal = result.response.text();
+      } else {
+        const perguntaAtual = mensagensGemini.pop().content;
+        const history = mensagensGemini.map(m => ({
+          role: m.role === 'assistant' ? 'model' : 'user',
+          parts: [{ text: m.content }]
+        }));
+
+        const chat = geminiModel.startChat({ history });
+        const result = await chat.sendMessage(perguntaAtual);
+        respostaFinal = result.response.text();
+      }
     }
 
-    // Retorna a resposta vitoriosa (seja de qual IA for)
     return NextResponse.json({ content: respostaFinal });
 
   } catch (error) {
     console.error("ERRO NO BACKEND:", error);
-    return NextResponse.json({ content: "Tive um soluço técnico aqui na rede. Pode me repetir a pergunta?" });
+    return NextResponse.json({ content: "Tive um soluço técnico. Pode repetir?" });
   }
 }
