@@ -12,6 +12,8 @@ export default function ChatPage() {
       content: "Olá! Sou o especialista técnico da **Casa das Resistências**. Como posso ajudar no seu projeto hoje? 🔧✨",
     },
   ]);
+  // ID único da conversa (reinicia ao recarregar a aba)
+  const [conversationId] = useState(() => crypto.randomUUID());
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef(null);
@@ -23,8 +25,8 @@ export default function ChatPage() {
   const sendMessage = async (e) => {
     e.preventDefault();
     if (!input.trim()) return;
-    const newMessages = [...messages, { role: "user", content: input }];
-    setMessages(newMessages);
+    const newMessages = [...messages.slice(-2), { role: "user", content: input }];
+    setMessages([...messages, { role: "user", content: input }]);
     setInput("");
     setIsLoading(true);
 
@@ -32,7 +34,7 @@ export default function ChatPage() {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: newMessages }),
+        body: JSON.stringify({ conversationId, messages: newMessages }),
       });
       const data = await response.json();
       setMessages((prev) => [...prev, { role: "assistant", content: data.content }]);
