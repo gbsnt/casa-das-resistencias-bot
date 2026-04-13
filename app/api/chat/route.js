@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server';
 import { Pinecone } from '@pinecone-database/pinecone';
-
-// IMPORTAÇÕES EXTERNAS (O Segredo da Organização)
-import { buildSystemPrompt } from '@/lib/prompt'; // Ajuste para o seu caminho correto
-import { GROQ_MODELS, OPENROUTER_MODELS } from '@/lib/models'; // Importando suas listas!
+import { buildSystemPrompt } from '@/lib/prompt'; 
+import { MODEL_HIERARCHY } from '@/lib/models'; // Importando a nova hierarquia
 
 export async function POST(req) {
   let respostaFinal = "";
@@ -18,25 +16,19 @@ export async function POST(req) {
     const groqKey = (process.env.GROQ_API_KEY || "").trim();
     const orKey = (process.env.OPENAI_API_KEY || "").trim();
 
-    // 1. PINECONE (RAG)
+    // 1. BUSCA TÉCNICA (Pinecone)
     try {
       const pc = new Pinecone({ apiKey: pcKey });
       const index = pc.index('catalogo-casa');
-      
       const resIA = await fetch('https://api.pinecone.io/embed', {
         method: 'POST',
-        headers: { 
-          'Api-Key': pcKey, 
-          'Content-Type': 'application/json',
-          'X-Pinecone-API-Version': '2024-07' 
-        },
+        headers: { 'Api-Key': pcKey, 'Content-Type': 'application/json', 'X-Pinecone-API-Version': '2024-07' },
         body: JSON.stringify({
           model: 'multilingual-e5-large',
           parameters: { input_type: 'query', truncate: 'END' },
           inputs: [{ text: ultimaPergunta }]
         })
       });
-      
       if (resIA.ok) {
         const dataIA = await resIA.json();
         const vector = dataIA.data?.[0]?.values;
@@ -45,95 +37,61 @@ export async function POST(req) {
           contexto = busca.matches.map(m => m.metadata.text).join('\n---\n');
         }
       }
-    } catch (e) {
-      console.log("⚠️ Pinecone em espera ou sem resultados exatos.");
-    }
+    } catch (e) { console.log("⚠️ Erro Pinecone."); }
 
     const systemPrompt = buildSystemPrompt(contexto);
 
-    // 2. TENTATIVA GROQ (Loop na lista de modelos Groq)
-    let sucesso = false;
+    // 2. CASCATA DE INTELIGÊNCIA (Waterfall)
+    for (const item of MODEL_HIERARCHY) {
+      try {
+        console.log(`📡 Tentando ${item.provider.toUpperCase()}: ${item.model}...`);
+        
+        const url = item.provider === "groq" 
+          ? 'https://api.groq.com/openai/v1/chat/completions'
+          : 'https://openrouter.ai/api/v1/chat/completions';
+        
+        const key = item.provider === "groq" ? groqKey : orKey;
 
-    if (groqKey) {
-      for (const modelo of GROQ_MODELS) {
-        try {
-          console.log(`🚀 Tentando Groq com: ${modelo}...`);
-          const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${groqKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: modelo,
-              messages: [{ role: "system", content: systemPrompt }, ...historicoCurto],
-              temperature: 0 
-            })
-          });
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 
+            'Authorization': `Bearer ${key}`, 
+            'Content-Type': 'application/json',
+            ...(item.provider === "openrouter" && { 'HTTP-Referer': 'http://localhost:3000', 'X-Title': 'CasaResistencias' })
+          },
+          body: JSON.stringify({
+            model: item.model,
+            messages: [{ role: "system", content: systemPrompt }, ...historicoCurto],
+            temperature: 0
+          })
+        });
 
-          if (groqRes.ok) {
-            const data = await groqRes.json();
-            respostaFinal = data.choices[0].message.content;
-            console.log(`✅ Sucesso na Groq com o modelo: ${modelo}!`);
-            sucesso = true;
-            break; // Sai do loop da Groq se deu certo
-          } else {
-            console.log(`⚠️ Groq ${modelo} ocupado. Tentando próximo...`);
-          }
-        } catch (err) {
-          console.log(`⚠️ Erro de rede no Groq ${modelo}.`);
+        if (response.ok) {
+          const data = await response.json();
+          respostaFinal = data.choices[0].message.content;
+          console.log(`✅ Sucesso com ${item.model}!`);
+          break; // MATOU A CHARADA, SAI DO LOOP
+        } else {
+          const erroMsg = await response.text();
+          console.log(`❌ ${item.model} falhou (Status: ${response.status}). Próximo...`);
         }
+      } catch (err) {
+        console.log(`🔥 Erro de conexão com ${item.model}.`);
       }
     }
 
-    // 3. FALLBACK: CASCATA OPENROUTER (Se todos da Groq falharam)
-    if (!sucesso && orKey.startsWith("sk-or")) {
-      console.log("🔥 Groq esgotado. Iniciando Cascata OpenRouter...");
-      
-      for (const modelo of OPENROUTER_MODELS) {
-        try {
-          console.log(`🌟 Tentando OpenRouter com: ${modelo}...`);
-          const orRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-            method: 'POST',
-            headers: { 
-              'Authorization': `Bearer ${orKey}`, 
-              'Content-Type': 'application/json',
-              'HTTP-Referer': 'http://localhost:3000',
-              'X-Title': 'SuporteTecnico'
-            },
-            body: JSON.stringify({
-              model: modelo,
-              messages: [{ role: "system", content: systemPrompt }, ...historicoCurto],
-              temperature: 0
-            })
-          });
-
-          if (orRes.ok) {
-            const orData = await orRes.json();
-            respostaFinal = orData.choices[0].message.content;
-            console.log(`✅ OpenRouter (${modelo}) salvou a pátria!`);
-            sucesso = true;
-            break; // Sai do loop assim que acha um que funciona
-          } else {
-            console.log(`⚠️ Modelo ${modelo} ocupado. Indo para o próximo...`);
-          }
-        } catch (e) {
-          console.log(`⚠️ Erro no OpenRouter (${modelo}). Motivo:`, e.message);
-        }
-      }
+    // 3. FILTROS E RESPOSTA
+    if (!respostaFinal) {
+      respostaFinal = "🔧 Nossa engenharia está com alta demanda. Por favor, tente novamente em 60 segundos. ⚡";
     }
 
-    // 4. RESPOSTA DE SEGURANÇA FINAL
-    if (!sucesso || !respostaFinal) {
-      respostaFinal = "🔧 Nossos sistemas de cálculo estão com alta demanda. Por favor, **aguarde 60 segundos** e envie sua pergunta técnica novamente para que possamos projetar sua resistência! ⚡";
-    }
-
-    // 5. FILTRO CONTRA ALUCINAÇÃO DE PREÇOS
     if (respostaFinal.includes("R$")) {
-      respostaFinal = "Fabricamos resistências sob medida. Fale com nosso comercial para orçamentos exatos. 📞";
+      respostaFinal = "Para orçamentos e valores, consulte nosso comercial. 📞";
     }
 
     return NextResponse.json({ content: respostaFinal });
 
   } catch (error) {
-    console.error("🔥 Erro fatal:", error.message);
-    return NextResponse.json({ content: "Tivemos um problema de conexão com a engenharia. Pode repetir a mensagem? 🔄" });
+    return NextResponse.json({ content: "Erro de conexão. Tente novamente. 🔄" });
   }
 }
