@@ -4,108 +4,133 @@ import { Pinecone } from '@pinecone-database/pinecone';
 export async function POST(req) {
   try {
     const { messages } = await req.json();
-    const ultimaPergunta = messages[messages.length - 1]?.content || "";
-
-    // Chaves de API (Certifique-se que estão no seu .env.local)
-    const pinKey = (process.env.PINECONE_API_KEY || "").trim();
-    const groqKey = (process.env.GROQ_API_KEY || "").trim();
-    const gemKey = (process.env.GEMINI_API_KEY || "").trim();
-
-    const pc = new Pinecone({ apiKey: pinKey });
-    const index = pc.index('catalogo-casa');
-
-    let contextoTecnico = "";
+    const ultimaPergunta = messages[messages.length - 1].content;
+    const historicoParaBusca = messages.slice(-2).map(m => m.content).join(' ');
     
-    // 1. BUSCA SEMÂNTICA NO PINECONE
-    const mensagensUsuario = messages.filter(m => m.role === 'user');
-    const termoBusca = mensagensUsuario.slice(-2).map(m => m.content).join(' ');
-
-    if (termoBusca.length > 3) {
-      try {
-        const resEmb = await fetch('https://api.pinecone.io/embed', {
+    const apiKey = (process.env.PINECONE_API_KEY || "").trim();
+    const groqKey = (process.env.GROQ_API_KEY || "").trim();
+    
+    // AQUI É A SUA CHAVE SK-OR-V1... QUE ESTÁ NO .ENV.LOCAL
+    const openRouterKey = (process.env.OPENAI_API_KEY || "").trim(); 
+    
+    const pc = new Pinecone({ apiKey });
+    const index = pc.index('catalogo-casa');
+    
+    let termoParaBusca = ultimaPergunta;
+    if (ultimaPergunta.length < 10) termoParaBusca = historicoParaBusca;
+    
+    // 1. PINECONE
+    let contexto = "";
+    try {
+        const resIA = await fetch('https://api.pinecone.io/embed', {
           method: 'POST',
-          headers: { 'Api-Key': pinKey, 'Content-Type': 'application/json', 'X-Pinecone-API-Version': '2024-07' },
+          headers: { 'Api-Key': apiKey, 'Content-Type': 'application/json', 'X-Pinecone-API-Version': '2024-07' },
           body: JSON.stringify({
             model: 'multilingual-e5-large',
             parameters: { input_type: 'query', truncate: 'END' },
-            inputs: [{ text: termoBusca }]
+            inputs: [{ text: termoParaBusca }] 
           })
         });
-        const dataEmb = await resEmb.json();
-        const vector = dataEmb.data?.[0]?.values;
-        if (vector) {
-          const busca = await index.query({ vector, topK: 6, includeMetadata: true });
-          contextoTecnico = busca.matches
-            .filter(m => m.score > 0.45)
-            .map(m => m.metadata.text)
-            .join('\n---\n');
+        const dataIA = await resIA.json();
+        const queryVector = dataIA.data?.[0]?.values;
+        
+        if (queryVector) {
+          const busca = await index.query({ vector: queryVector, topK: 4, includeMetadata: true });
+          contexto = busca.matches.map(match => match.metadata.text).join('\n---\n');
         }
-      } catch (e) { console.error("Erro Pinecone:", e.message); }
+    } catch (e) {
+        console.error("Aviso: Pinecone offline.", e.message);
     }
 
-    // 2. DIRETRIZES DE ENGENHARIA SÊNIOR (O CÉREBRO)
-    const systemPrompt = `Você é o Engenheiro de Aplicação Sênior da Casa das Resistências. 🔧
-    Sua missão é fornecer suporte técnico especializado com base no CONTEXTO fornecido.
+    // 2. SYSTEM PROMPT
+    const systemPrompt = `Você é o Engenheiro de Suporte da Casa das Resistências. 
+    Conhecimento RESTRITO ao contexto fornecido.
+    
+    REGRAS DE CONDUTA:
+    1. ZERO INVENÇÃO: Use APENAS Inox, NiCr, MgO. Nunca cite eletrônica ou plástico.
+    2. FÓRMULAS: Use LaTeX para potência: $$P = \\frac{V^2}{R}$$.
+    3. TABELAS: Sempre que houver dados técnicos, use o formato de tabela Markdown.
+    4. PREÇOS: Proibido citar valores. Responda: "Para orçamentos, consulte nosso setor comercial. 📞"
+    5. MEDIDAS: Somos fabricantes sob medida. Peça sempre Diâmetro, Comprimento, Tensão (V) e Potência (W).
+    
+    CONTEXTO DO MANUAL:
+    ${contexto || "Dados não localizados. Siga o protocolo de peças sob medida."}`;
 
-    DIRETRIZES RÍGIDAS:
-    - PROIBIÇÃO DE INVENÇÃO: Nunca invente modelos, SKUs ou dados técnicos. Se não estiver no contexto, peça: **Tensão (V)**, **Potência (W)** e **Dimensões (mm)**.
-    - ZERO PREÇOS: Proibido citar valores em R$. Encaminhe ao comercial para orçamentos.
-    - FORMATAÇÃO: Use **Negrito** para destacar dados e produtos. Use tabelas Markdown (| Coluna |) sem blocos de código.
-    - ESTILO: Seja técnico, prestativo e use emojis (⚡, ✅, ⚙️).
+    let respostaFinal = "";
 
-    FLUXOS DE INTELIGÊNCIA:
-    1. **PROJETO**: Explique a física (condução/convecção/IR) e indique o tipo de resistência ideal.
-    2. **BUSCA DIRETA**: Identifique o produto no catálogo, apresente o resumo técnico e confirme a aplicação.
-    3. **DIAGNÓSTICO (FALHA)**: Se a peça queimou, investigue causas (folga no furo, erro de controle, oxidação). Sugira melhorias como o **Cartucho Fendilhado** para folgas.
-    4. **NACIONALIZAÇÃO**: Informe que somos fabricantes e nacionalizamos qualquer peça importada sob medida.
-    5. **INSTALAÇÃO**: Dê orientações práticas (ex: tolerância H9 em furos, aperto de bornes).
-    6. **FECHAMENTO**: Peça obrigatoriamente: Tensão (V), Potência (W), Dimensões (mm) e Material.
-
-    CONTEXTO TÉCNICO:
-    ${contextoTecnico || "Informação específica não localizada no manual. Use conhecimento geral e peça os 4 pilares (V, W, mm, Material)."}`;
-
-    // 3. TENTATIVA NA GROQ (Llama 3.1 8B - Alta Estabilidade)
+    // 3. GROQ
     try {
-      const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      console.log("🚀 Disparando Groq (Llama 3.1 8B)...");
+      const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${groqKey}`, 'Content-Type': 'application/json' },
+        headers: { 
+            'Authorization': `Bearer ${groqKey}`, 
+            'Content-Type': 'application/json' 
+        },
         body: JSON.stringify({
-          model: "llama-3.1-8b-instant", 
-          messages: [{ role: "system", content: systemPrompt }, ...messages.slice(-5)],
-          temperature: 0.1
+          model: "llama-3.1-8b-instant",
+          messages: [{ role: "system", content: systemPrompt }, ...messages.slice(-3)],
+          temperature: 0 
         })
       });
 
-      if (groqRes.ok) {
-        const data = await groqRes.json();
-        return NextResponse.json({ content: data.choices[0].message.content });
+      if (groqResponse.ok) {
+        const groqData = await groqResponse.json();
+        respostaFinal = groqData.choices[0].message.content;
+      } else {
+        throw new Error(`Groq Status: ${groqResponse.status}`);
       }
-    } catch (err) { console.warn("Groq falhou..."); }
 
-    // 4. FALLBACK GEMINI (VIA API V1 ESTÁVEL - SEM ERRO 404)
-    try {
-      const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${gemKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ 
-            parts: [{ text: `Aja como Engenheiro da Casa das Resistências. Instrução: ${systemPrompt}\n\nPergunta: ${ultimaPergunta}` }] 
-          }]
-        })
-      });
-
-      const gemData = await geminiRes.json();
-      if (geminiRes.ok && gemData.candidates) {
-        return NextResponse.json({ content: gemData.candidates[0].content.parts[0].text });
+    } catch (err) {
+      console.log("⚠️ Groq estourou a cota. Verificando Fallback OpenRouter...", err.message);
+      
+      // 4. FALLBACK: OPENROUTER
+      if (!openRouterKey || !openRouterKey.startsWith("sk-or")) {
+          console.error("❌ Chave inválida para OpenRouter. Deve começar com sk-or");
+          return NextResponse.json({ 
+            content: "Olá! 🔧 Nossos servidores estão com pico de acessos neste minuto. Por favor, **aguarde 60 segundos** e me mande um 'Oi' novamente! ⚡" 
+          });
       }
-    } catch (e) { console.error("Erro Crítico Gemini:", e.message); }
 
-    return NextResponse.json({ 
-      content: "Olá! 🔧 Tive uma breve oscilação na conexão com nossa base técnica. Para que eu possa te ajudar agora, você poderia me informar a **Tensão (V)**, **Potência (W)** e as **Dimensões** da peça? ⚡" 
-    });
+      try {
+        console.log("🌟 Acionando OpenRouter (Meta Llama 3 8B Livre)...");
+        // Mudamos a URL para a API do OpenRouter! Fim do erro 401.
+        const fallbackResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: { 
+              'Authorization': `Bearer ${openRouterKey}`, 
+              'Content-Type': 'application/json',
+              'HTTP-Referer': 'http://localhost:3000', // OpenRouter exige isso
+              'X-Title': 'ChatbotSuporte' // OpenRouter exige isso
+          },
+          body: JSON.stringify({
+            model: "meta-llama/llama-3-8b-instruct:free", // Modelo 100% gratuito no OpenRouter
+            messages: [{ role: "system", content: systemPrompt }, ...messages.slice(-3)],
+            temperature: 0 
+          })
+        });
+
+        if (fallbackResponse.ok) {
+          const fallbackData = await fallbackResponse.json();
+          respostaFinal = fallbackData.choices[0].message.content;
+          console.log("✅ OpenRouter salvou a pátria!");
+        } else {
+            console.error("❌ Erro no OpenRouter:", await fallbackResponse.text());
+            return NextResponse.json({ 
+              content: "Olá! 🔧 Houve uma oscilação geral nos servidores de IA. Pode repetir a mensagem em instantes? 🔄" 
+            });
+        }
+      } catch (e) {
+        return NextResponse.json({ content: "Tive um soluço de conexão na nuvem. Pode repetir? 🔄" });
+      }
+    }
+
+    // 5. FILTRO ANTIBURRICE DE PREÇO
+    if (respostaFinal.includes("R$")) respostaFinal = "Nossos projetos são 100% sob medida para sua indústria. Consulte nosso comercial para orçamentos exatos. 📞";
+
+    return NextResponse.json({ content: respostaFinal });
 
   } catch (error) {
-    console.error("ERRO GLOBAL:", error.message);
-    return NextResponse.json({ content: "Erro de processamento. Por favor, tente novamente. ⚙️" });
+    return NextResponse.json({ content: "Erro no servidor interno. Tente novamente! ⚙️" });
   }
 }
