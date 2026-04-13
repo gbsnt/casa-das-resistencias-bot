@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { Pinecone } from '@pinecone-database/pinecone';
 import { buildSystemPrompt } from '@/lib/prompt'; 
-import { MODEL_HIERARCHY } from '@/lib/models'; // Importando a nova hierarquia
+import { MODEL_HIERARCHY } from '@/lib/models'; 
 
 export async function POST(req) {
   let respostaFinal = "";
@@ -16,7 +16,7 @@ export async function POST(req) {
     const groqKey = (process.env.GROQ_API_KEY || "").trim();
     const orKey = (process.env.OPENAI_API_KEY || "").trim();
 
-    // 1. BUSCA TÉCNICA (Pinecone)
+    // 1. PINECONE (Busca de Catálogo)
     try {
       const pc = new Pinecone({ apiKey: pcKey });
       const index = pc.index('catalogo-casa');
@@ -37,19 +37,16 @@ export async function POST(req) {
           contexto = busca.matches.map(m => m.metadata.text).join('\n---\n');
         }
       }
-    } catch (e) { console.log("⚠️ Erro Pinecone."); }
+    } catch (e) { console.log("⚠️ Erro Pinecone ou busca de contexto."); }
 
     const systemPrompt = buildSystemPrompt(contexto);
 
-    // 2. CASCATA DE INTELIGÊNCIA (Waterfall)
+    // 2. CASCATA DE MODELOS (Waterfall com Debug Avançado)
+    let sucesso = false;
     for (const item of MODEL_HIERARCHY) {
       try {
-        console.log(`📡 Tentando ${item.provider.toUpperCase()}: ${item.model}...`);
-        
-        const url = item.provider === "groq" 
-          ? 'https://api.groq.com/openai/v1/chat/completions'
-          : 'https://openrouter.ai/api/v1/chat/completions';
-        
+        console.log(`📡 Tentando ${item.model}...`);
+        const url = item.provider === "groq" ? 'https://api.groq.com/openai/v1/chat/completions' : 'https://openrouter.ai/api/v1/chat/completions';
         const key = item.provider === "groq" ? groqKey : orKey;
 
         const response = await fetch(url, {
@@ -69,29 +66,28 @@ export async function POST(req) {
         if (response.ok) {
           const data = await response.json();
           respostaFinal = data.choices[0].message.content;
-          console.log(`✅ Sucesso com ${item.model}!`);
-          break; // MATOU A CHARADA, SAI DO LOOP
+          console.log(`✅ Sucesso com ${item.model}`);
+          sucesso = true;
+          break;
         } else {
-          const erroMsg = await response.text();
-          console.log(`❌ ${item.model} falhou (Status: ${response.status}). Próximo...`);
+          // CAPTURA O ERRO REAL PARA O TERMINAL
+          const erroTexto = await response.text();
+          console.log(`❌ ${item.model} negou a requisição. Status: ${response.status}. Detalhe: ${erroTexto.substring(0, 100)}...`);
         }
-      } catch (err) {
-        console.log(`🔥 Erro de conexão com ${item.model}.`);
+      } catch (err) { 
+        console.log(`🔥 Erro de rede/conexão crítica com ${item.model}:`, err.message); 
       }
     }
 
-    // 3. FILTROS E RESPOSTA
+    // 3. FILTRO FINAL E RESPOSTA
     if (!respostaFinal) {
-      respostaFinal = "🔧 Nossa engenharia está com alta demanda. Por favor, tente novamente em 60 segundos. ⚡";
-    }
-
-    if (respostaFinal.includes("R$")) {
-      respostaFinal = "Para orçamentos e valores, consulte nosso comercial. 📞";
+      respostaFinal = "🔧 Nossa engenharia está com alta demanda. Por favor, aguarde 60 segundos e tente novamente para que possamos projetar sua resistência! ⚡";
     }
 
     return NextResponse.json({ content: respostaFinal });
 
   } catch (error) {
-    return NextResponse.json({ content: "Erro de conexão. Tente novamente. 🔄" });
+    console.error("ERRO FATAL NA ROTA:", error);
+    return NextResponse.json({ content: "Tivemos um problema técnico. Tente novamente. 🔄" });
   }
 }
