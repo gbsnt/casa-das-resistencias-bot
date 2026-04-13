@@ -7,21 +7,21 @@ export async function POST(req) {
     const { messages } = await req.json();
     const ultimaPergunta = messages[messages.length - 1].content;
     
-    // Pega as últimas 3 mensagens para dar contexto à busca
+    // Melhora a busca: usa o histórico para entender se o usuário está continuando um assunto
     const contextoBusca = messages.slice(-3).map(m => m.content).join(' ');
 
     const apiKey = (process.env.PINECONE_API_KEY || "").trim();
     const pc = new Pinecone({ apiKey });
     const index = pc.index('catalogo-casa');
 
-    // 1. GERAÇÃO DE EMBEDDING (Focada em capturar o assunto técnico)
+    // 1. GERAÇÃO DE EMBEDDING
     const resIA = await fetch('https://api.pinecone.io/embed', {
       method: 'POST',
       headers: { 'Api-Key': apiKey, 'Content-Type': 'application/json', 'X-Pinecone-API-Version': '2024-07' },
       body: JSON.stringify({
         model: 'multilingual-e5-large',
         parameters: { input_type: 'query', truncate: 'END' },
-        inputs: [{ text: contextoBusca }] // Buscamos usando o contexto completo
+        inputs: [{ text: contextoBusca }]
       })
     });
 
@@ -29,40 +29,36 @@ export async function POST(req) {
     const queryVector = dataIA.data?.[0]?.values;
 
     let contextoTecnico = "";
-    
     if (queryVector) {
-      // AUMENTAMOS O TOPK PARA 15 (Para pegar mais pedaços do manual)
       const busca = await index.query({ 
         vector: queryVector, 
-        topK: 15, 
+        topK: 12, // Reduzi para 12 para ser mais certeiro e evitar confusão
         includeMetadata: true 
       });
 
-      // LOG DE DIAGNÓSTICO (Olhe o terminal do seu VS Code após perguntar algo)
-      console.log(`🔍 BUSCA NO BANCO: Encontrei ${busca.matches.length} resultados.`);
-      if (busca.matches.length > 0) {
-        console.log(`📄 PRIMEIRO RESULTADO: ${busca.matches[0].metadata.text.substring(0, 100)}...`);
-      }
-
       contextoTecnico = busca.matches
-        .filter(m => m.score > 0.3) // Filtra resultados que não têm nada a ver
+        .filter(m => m.score > 0.35) // Filtro um pouco mais rigoroso
         .map(match => match.metadata.text)
         .join('\n---\n');
     }
 
-    const systemPrompt = `Você é o Engenheiro de Suporte da Casa das Resistências. 
-    Seu cérebro é EXCLUSIVAMENTE o CONTEXTO TÉCNICO fornecido.
+    // 2. O SYSTEM PROMPT "CÉREBRO TÉCNICO"
+    const systemPrompt = `Você é o Engenheiro Sênior de Aplicação da Casa das Resistências. 
+    Sua missão é dar o "norte" técnico para o projeto do cliente.
 
-    REGRAS CRÍTICAS:
-    1. Se a informação não estiver no contexto abaixo, diga: "Não localizei os detalhes exatos no catálogo, mas para orçarmos essa peça, informe a Tensão (V), Potência (W) e Dimensões."
-    2. Nunca invente marcas ou especificações (ex: nada de Bronze ou Hotmel se não estiver no texto).
-    3. Use tabelas Markdown para listar dados técnicos.
-    4. Responda de forma direta e profissional.
+    DIRETRIZES DE OURO:
+    1. RACIOCÍNIO DE ENGENHARIA: Se o cliente fornecer volume (L) e temperatura (°C), você deve realizar um cálculo estimativo. 
+       - Exemplo base: Para 50L de água, de 20°C a 100°C, estima-se a necessidade de 5kW a 6kW para aquecer em aproximadamente 1 hora.
+    2. CONSULTA AO CONTEXTO: Use os dados do manual abaixo para indicar o modelo exato (Ex: IFR, ISB, Campânula CP-P).
+    3. TABELAS: Sempre apresente as especificações técnicas ou indicações em Tabelas Markdown.
+    4. CHECKLIST OBRIGATÓRIO: Ao final de cada indicação, peça: Tensão (V), Potência desejada (W), Dimensões (mm) e Material do Recipiente.
+    5. FIDELIDADE TÉCNICA: Não confunda aquecedores de aves (Campânula) com aquecedores de tanques químicos (ISB).
+    6. ZERO PREÇOS: Nunca fale valores em R$. Direcione para o comercial.
 
-    CONTEXTO TÉCNICO EXTRAÍDO DO BANCO:
-    ${contextoTecnico || "AVISO: O banco de dados não retornou informações para esta busca."}`;
+    CONTEXTO TÉCNICO DO MANUAL:
+    ${contextoTecnico || "Informação específica não localizada. Use seu conhecimento de engenharia térmica para guiar o cliente e pedir os dados de projeto."}`;
 
-    // 2. DISPARO PARA A IA (Groq com Fallback Gemini)
+    // 3. DISPARO PARA A IA (Groq com Llama 3.1 8B ou 70B)
     let respostaFinal = "";
     try {
       const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -71,12 +67,17 @@ export async function POST(req) {
         body: JSON.stringify({
           model: "llama-3.1-8b-instant",
           messages: [{ role: "system", content: systemPrompt }, ...messages.slice(-6)],
-          temperature: 0 
+          temperature: 0.2 // Baixa temperatura para evitar alucinação
         })
       });
+
       const groqData = await groqResponse.json();
+      
+      if (!groqResponse.ok) throw new Error(groqData.error?.message || "Erro Groq");
       respostaFinal = groqData.choices[0].message.content;
+
     } catch (err) {
+      console.warn("⚠️ Groq offline ou erro, tentando Gemini Fallback...");
       const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
       const geminiModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash", systemInstruction: systemPrompt });
       const result = await geminiModel.generateContent(ultimaPergunta);
@@ -86,7 +87,9 @@ export async function POST(req) {
     return NextResponse.json({ content: respostaFinal });
 
   } catch (error) {
-    console.error("ERRO:", error);
-    return NextResponse.json({ content: "Tive um erro ao consultar a engenharia. Tente novamente." });
+    console.error("❌ ERRO NO ROUTE:", error);
+    return NextResponse.json({ 
+      content: "Tive um problema ao consultar nosso catálogo técnico. Poderia repetir a sua dúvida?" 
+    });
   }
 }
