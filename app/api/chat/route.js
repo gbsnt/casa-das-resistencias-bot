@@ -7,6 +7,7 @@ export async function POST(req) {
     const { messages } = await req.json();
     const ultimaPergunta = messages[messages.length - 1].content;
 
+    // Filtra apenas mensagens do usuário para evitar que a IA busque suas próprias tabelas no banco
     const mensagensUsuario = messages.filter(m => m.role === 'user');
     const contextoBusca = mensagensUsuario.slice(-2).map(m => m.content).join(' ');
 
@@ -50,24 +51,28 @@ export async function POST(req) {
       }
     }
 
-    // PROMPT BLINDADO - REGRAS DE BLOQUEIO ABSOLUTO
+    // PROMPT REESTRUTURADO: FOCO EM FLUXOS E RENDERIZAÇÃO DE TABELAS
     const systemPrompt = `Você é o Engenheiro de Aplicação Sênior da Casa das Resistências.
-    Sua função é fornecer suporte técnico EXCLUSIVAMENTE com base no CONTEXTO DO CATÁLOGO fornecido abaixo.
 
-    REGRAS DE BLOQUEIO (SOB PENA DE DESLIGAMENTO DO SISTEMA):
-    1. PROIBIÇÃO DE INVENÇÃO: É ESTRITAMENTE PROIBIDO criar, adivinhar ou preencher tabelas com SKUs, dimensões, voltagens ou modelos que não estejam literalmente escritos no CONTEXTO DO CATÁLOGO.
-    2. PROIBIÇÃO DE PREÇOS: É ESTRITAMENTE PROIBIDO gerar valores monetários (R$, frete, instalação, taxas). Se o cliente perguntar o preço, responda EXATAMENTE: "Para valores e orçamentos, por favor, envie os dados técnicos para o nosso setor comercial."
-    3. MODO DE SEGURANÇA: Se a busca do cliente (ex: máquina DC-50) não retornar dados exatos no CONTEXTO DO CATÁLOGO, não tente adivinhar. Responda: "Não tenho as especificações exatas dessa máquina no meu catálogo de acesso rápido. Para eu indicar a peça correta, por favor, me informe as dimensões da furação e a potência desejada."
-    4. NÃO SEJA UM ROBÔ: Aja naturalmente. Nunca imprima os nomes das regras ou "FLUXO 1", "Ação" na tela.
+    REGRAS DE BLOQUEIO ABSOLUTO:
+    1. PROIBIÇÃO DE INVENÇÃO: Nunca invente SKUs, modelos, limites térmicos ou dados técnicos. Use APENAS o contexto abaixo.
+    2. PROIBIÇÃO DE PREÇOS: Nunca forneça valores (R$). Responda: "Para orçamentos, envie os dados técnicos ao nosso setor comercial."
+    3. MODO DE SEGURANÇA: Se o produto exato não estiver no catálogo, peça: Tensão (V), Potência (W) e Dimensões (mm).
 
-    IDENTIFIQUE O FLUXO DO CLIENTE:
-    - FLUXO 1 (Dúvida Geral): Explique a física térmica e peça as medidas.
-    - FLUXO 2 (Busca Específica): Se o produto estiver no contexto, faça um resumo e confirme. Se não estiver, ative o MODO DE SEGURANÇA.
-    - FLUXO 3 (Queima/Falha): Atue como investigador. Pergunte sobre folgas, termostato e sugira melhorias do catálogo (ex: Cartucho Fendilhado para folgas).
-    - FLUXO 4 (Fechamento): Diga que fabricamos sob medida e peça: 1. Tensão (V) e Potência (W), 2. Dimensões (mm), 3. Material a aquecer.
+    REGRAS DE RENDERIZAÇÃO:
+    - Use obrigatoriamente TABELAS MARKDOWN para dados técnicos.
+    - NUNCA use blocos de código (ex: \`\`\`markdown) para envolver tabelas. Escreva a tabela diretamente no texto para garantir a renderização.
 
-    CONTEXTO DO CATÁLOGO (SUA ÚNICA FONTE DA VERDADE):
-    ${contextoTecnico || "[CATÁLOGO VAZIO - ATIVE O MODO DE SEGURANÇA E PEÇA AS MEDIDAS AO CLIENTE]"}`;
+    FLUXOS DE ATENDIMENTO:
+    1. DÚVIDA DE PROJETO: Explique a física térmica e indique o produto adequado do catálogo.
+    2. BUSCA DIRETA: Resuma o produto encontrado e gere a Tabela Markdown.
+    3. DIAGNÓSTICO DE FALHAS: Se a peça queimou, investigue (folga no furo, falta de controle, nível de fluido) e sugira melhorias (ex: Cartucho Fendilhado para folgas).
+    4. NACIONALIZAÇÃO: Informe que fabricamos sob medida e podemos replicar peças importadas. Peça as medidas da original.
+    5. DICAS DE INSTALAÇÃO: Oriente sobre boas práticas (ex: tolerância H9, aperto de terminais).
+    6. FECHAMENTO: Peça os 4 pilares: Tensão (V), Potência (W), Dimensões (mm) e Material.
+
+    CONTEXTO DO CATÁLOGO:
+    ${contextoTecnico || "Informação não localizada no catálogo. Acione o MODO DE SEGURANÇA."}`;
 
     let respostaFinal = "";
 
@@ -78,10 +83,9 @@ export async function POST(req) {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          // MUDANÇA CRÍTICA: Usando o modelo de 70 Bilhões de parâmetros (Muito mais inteligente e obediente)
           model: "llama-3.3-70b-versatile",
           messages: [{ role: "system", content: systemPrompt }, ...historicoCurto],
-          temperature: 0.0 // MUDANÇA CRÍTICA: Zero criatividade. 100% factual.
+          temperature: 0.1 // 0.1 permite a renderização correta do Markdown sem perder a precisão factual
         })
       });
 
@@ -91,10 +95,10 @@ export async function POST(req) {
       respostaFinal = groqData.choices[0].message.content;
 
     } catch (err) {
-      console.log("⚠️ Groq offline, ativando Fallback Gemini...");
+      console.log("⚠️ Groq falhou, ativando Fallback Gemini Pro...");
       const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
       const geminiModel = genAI.getGenerativeModel({ 
-        model: "gemini-1.5-pro", // Upgrade para o modelo Pro no Fallback também
+        model: "gemini-1.5-pro", 
         systemInstruction: systemPrompt 
       });
       const result = await geminiModel.generateContent(ultimaPergunta);
@@ -104,9 +108,9 @@ export async function POST(req) {
     return NextResponse.json({ content: respostaFinal });
 
   } catch (error) {
-    console.error("❌ ERRO GRAVE NA ROTA:", error);
+    console.error("❌ ERRO NA ROTA:", error);
     return NextResponse.json({ 
-      content: "Houve uma falha de conexão com a nossa base de engenharia. Poderia repetir a sua mensagem?" 
+      content: "Desculpe, tive um problema de conexão com a engenharia. Poderia repetir?" 
     });
   }
 }
