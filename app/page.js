@@ -1,281 +1,293 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Bot, User, Flame, Loader2, Cloud, Activity } from "lucide-react";
+import { Send, Flame, Loader2, Search, ArrowRight, RefreshCw, Factory, ClipboardList } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-const MAX_SESSION_TOKENS = 25000; 
-
 export default function ChatPage() {
-  // 1. Começamos com a lista vazia para a IA preencher a vitrine via RAG
+  const [step, setStep] = useState("search"); 
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState([]);
+  const [selectedProduct, setSelectedProduct] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [aiMode, setAiMode] = useState("cloud"); 
-  const [sessionTokens, setSessionTokens] = useState(0);
-  const [stats, setStats] = useState({ cpu: 0, ram: 0 });
-  const [isLocalhost, setIsLocalhost] = useState(false);
+  const [syncStatus, setSyncStatus] = useState("online"); // online, syncing, error
   const messagesEndRef = useRef(null);
-  
-  // Controle para evitar disparos duplicados no desenvolvimento
-  const hasInitialized = useRef(false);
-
-  // 🌍 DETECÇÃO DE AMBIENTE
-  useEffect(() => {
-    if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
-      setIsLocalhost(true);
-      setAiMode("local"); 
-    }
-  }, []);
-
-  // 🤖 GATILHO DA VITRINE DINÂMICA (RAG)
-  useEffect(() => {
-    if (hasInitialized.current) return;
-    hasInitialized.current = true;
-
-    const fetchWelcomeMessage = async () => {
-      setIsLoading(true);
-      try {
-        // Pergunta focada em PRODUTOS REAIS para forçar o RAG a trazer os dados certos
-        const hiddenMessage = [{ 
-          role: "user", 
-          content: "Liste apenas os principais títulos de produtos industriais disponíveis neste catálogo técnico." 
-        }];
-
-        const response = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: hiddenMessage, aiMode: "cloud" }),
-        });
-        
-        const data = await response.json();
-        setMessages([{ role: "assistant", content: data.content }]);
-        if (data.tokens) setSessionTokens(prev => prev + data.tokens);
-      } catch (error) {
-        setMessages([{ role: "assistant", content: "Bem-vindo à Casa das Resistências. [OPCOES: Resistências Cartucho, Resistências Tubulares, Resistências Coleira]" }]);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchWelcomeMessage();
-  }, []);
-
-  // 🔄 TELEMETRIA
-  useEffect(() => {
-    if (!isLocalhost) return;
-    const fetchStats = async () => {
-      try {
-        const res = await fetch('/api/stats');
-        if (res.ok) {
-          const data = await res.json();
-          setStats(data);
-        }
-      } catch (e) { console.log("Erro telemetria"); }
-    };
-    const interval = setInterval(fetchStats, 2000);
-    return () => clearInterval(interval);
-  }, [isLocalhost]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isLoading]);
+  }, [messages]);
 
-  const processMessage = async (textToSend) => {
-    if (!textToSend.trim() || isLoading) return;
+  // 🔄 BOTÃO DE SINCRONIZAÇÃO REAL
+  const syncCatalog = async () => {
+    setSyncStatus("syncing");
+    try {
+      const res = await fetch("/api/sync");
+      const data = await res.json();
+      if (data.success) {
+        setSyncStatus("online");
+        alert(`Sucesso! Catálogo atualizado com ${data.count} produtos do Notion.`);
+      } else {
+        setSyncStatus("error");
+        alert("Erro na sincronização: " + data.error);
+      }
+    } catch (e) {
+      setSyncStatus("error");
+      alert("Erro ao conectar com servidor.");
+    }
+  };
+
+  const handleSearch = async (e) => {
+    e?.preventDefault();
+    if (!query.trim()) return;
     setIsLoading(true);
-    const userMsg = { role: "user", content: textToSend };
-    const newMessages = [...messages, userMsg];
-    setMessages(newMessages);
+    setResults([]);
+    try {
+      const res = await fetch("/api/search", { method: "POST", body: JSON.stringify({ query }) });
+      const data = await res.json();
+      setResults(data.resultados || []);
+    } catch (e) { console.error("Erro busca"); }
+    finally { setIsLoading(false); }
+  };
+
+  const viewProduct = (product) => {
+    setSelectedProduct(product);
+    setStep("product");
+  };
+
+  const startCommercialChat = () => {
+    setStep("chat");
+    setMessages([{
+      role: "assistant",
+      content: `Olá. Sou o especialista comercial da Casa das Resistências. Para montarmos a proposta do modelo **${selectedProduct.nome}**, qual a quantidade de peças que você precisa? E quais as medidas exatas? [OPCOES: Orçar 10 peças, Tenho um desenho técnico, Falar com Vendedor]`
+    }]);
+  };
+
+  const processMessage = async (text) => {
+    if (!text.trim() || isLoading) return;
+    const newMsgs = [...messages, { role: "user", content: text }];
+    setMessages(newMsgs);
     setInput("");
+    setIsLoading(true);
 
     try {
-      const response = await fetch("/api/chat", {
+      const res = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: newMessages, aiMode }),
+        body: JSON.stringify({ messages: newMsgs, productName: selectedProduct.nome })
       });
-      const data = await response.json();
-      
+      const data = await res.json();
       setMessages(prev => [...prev, { role: "assistant", content: data.content }]);
-      
-      if (data.tokens && aiMode === "cloud") {
-        setSessionTokens(prev => prev + data.tokens);
-      }
-    } catch (error) {
-      setMessages(prev => [...prev, { role: "assistant", content: "⚠️ Erro na conexão técnica. [OPCOES: Tentar novamente]" }]);
-    } finally {
-      setIsLoading(false);
-    }
+    } catch (e) {
+      setMessages(prev => [...prev, { role: "assistant", content: "Erro de conexão." }]);
+    } finally { setIsLoading(false); }
   };
 
-  const renderMessageContent = (text, isAssistant, msgIndex) => {
-    let cleanText = text;
-    let options = [];
+  const formatMarkdownText = (text) => {
+    if (!text) return "";
+    let formatted = text;
 
-    if (isAssistant) {
-      const match = text.match(/\[OPCOES:\s*(.+?)\]/);
-      if (match) {
-        cleanText = text.replace(match[0], '').trim();
-        options = match[1].split(',').map(o => o.trim());
+    formatted = formatted.replace(
+      /## Especificações Técnicas\n([\s\S]*?)(?=\n##|$)/g,
+      (match, content) => {
+        const rows = content.split('\n').filter(line => line.trim().startsWith('-')).map(line => {
+          const cleanLine = line.replace(/^- /, '');
+          const splitMatch = cleanLine.match(/^(.*?):(.*)$/);
+          if (splitMatch) {
+            const key = splitMatch[1].replace(/\*\*/g, '').trim();
+            const val = splitMatch[2].replace(/\*\*/g, '').trim();
+            return `| **${key}** | ${val} |`;
+          }
+          return `| ${cleanLine} | |`;
+        });
+        if (rows.length === 0) return match;
+        return `## Especificações Técnicas\n\n| Característica | Detalhe Técnico |\n|---|---|\n${rows.join('\n')}\n\n`;
       }
-    }
-
-    const isLast = isAssistant && msgIndex === messages.length - 1;
-
-    return (
-      <div className="flex flex-col gap-3 w-full">
-        <div className={`prose prose-sm max-w-none leading-relaxed ${isAssistant ? 'text-zinc-700' : 'text-white'}`}>
-          <ReactMarkdown 
-            remarkPlugins={[remarkGfm]}
-            components={{
-              table: ({node, ...props}) => (
-                <div className="not-prose overflow-x-auto my-4 rounded-xl border border-zinc-200 shadow-sm bg-white">
-                  <table className="min-w-full text-left border-collapse text-sm whitespace-nowrap" {...props} />
-                </div>
-              ),
-              thead: ({node, ...props}) => <thead className="bg-zinc-50 border-b border-zinc-200" {...props} />,
-              th: ({node, ...props}) => <th className="px-4 py-3 font-bold text-zinc-700 uppercase tracking-wider text-[11px]" {...props} />,
-              td: ({node, ...props}) => <td className="px-4 py-3 text-zinc-600 border-b border-zinc-100 last:border-none" {...props} />,
-              tr: ({node, ...props}) => <tr className="even:bg-zinc-50/50 hover:bg-blue-50/40 transition-colors" {...props} />,
-              p: ({node, ...props}) => <p className="mb-3 last:mb-0" {...props} />
-            }}
-          >
-            {cleanText}
-          </ReactMarkdown>
-        </div>
-
-        {options.length > 0 && isLast && !isLoading && (
-          <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t border-zinc-100">
-            {options.map((opt, idx) => (
-              <button
-                key={idx}
-                onClick={() => processMessage(opt)}
-                className="px-4 py-2 text-[10px] font-black uppercase tracking-widest text-[#5897fb] bg-white border border-zinc-200 rounded-lg hover:border-[#5897fb] hover:bg-blue-50 transition-all shadow-sm active:scale-95"
-              >
-                {opt}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
     );
+
+    formatted = formatted.replace(
+      /## Códigos para Pedido \(SKU\)\n([\s\S]*?)(?=\n##|$)/g,
+      (match, content) => {
+        const rows = content.split('\n').filter(line => line.trim().startsWith('-')).map(line => {
+          const cleanLine = line.replace(/^- /, '');
+          const splitMatch = cleanLine.split('→');
+          if (splitMatch.length >= 2) {
+            return `| ${splitMatch[0].trim()} | **${splitMatch[1].trim()}** |`;
+          }
+          return `| ${cleanLine} | |`;
+        });
+        if (rows.length === 0) return match;
+        return `## Códigos para Pedido (SKU)\n\n| Modelo / Medidas | Código SKU |\n|---|---|\n${rows.join('\n')}\n\n`;
+      }
+    );
+
+    return formatted;
   };
 
-  const tokenPercentage = Math.min((sessionTokens / MAX_SESSION_TOKENS) * 100, 100);
+  const markdownComponents = {
+    h1: ({node, ...props}) => <h1 className="text-2xl sm:text-3xl font-semibold text-zinc-900 border-b border-zinc-100 pb-6 mb-8" {...props} />,
+    h2: ({node, ...props}) => <h2 className="text-sm font-semibold text-zinc-500 mt-10 mb-4 uppercase tracking-widest" {...props} />,
+    h3: ({node, ...props}) => <h3 className="text-base font-semibold text-zinc-800 mt-6 mb-3" {...props} />,
+    p: ({node, ...props}) => <p className="mb-4 leading-relaxed text-zinc-600 font-light" {...props} />,
+    strong: ({node, ...props}) => <strong className="font-semibold text-zinc-900" {...props} />,
+    ul: ({node, ...props}) => <ul className="list-disc pl-5 space-y-2 mb-8 text-zinc-600 font-light marker:text-zinc-300" {...props} />,
+    li: ({node, ...props}) => <li className="pl-1" {...props} />,
+    table: ({node, ...props}) => (
+      <div className="overflow-x-auto my-8 border border-zinc-200 rounded-lg">
+        <table className="min-w-full text-sm text-left bg-white" {...props} />
+      </div>
+    ),
+    thead: ({node, ...props}) => <thead className="bg-zinc-50 border-b border-zinc-200" {...props} />,
+    th: ({node, ...props}) => <th className="p-4 font-medium text-[11px] uppercase text-zinc-500 tracking-wider" {...props} />,
+    td: ({node, ...props}) => <td className="p-4 border-b border-zinc-100 text-zinc-600 font-light" {...props} />,
+    tr: ({node, ...props}) => <tr className="even:bg-zinc-50/30 hover:bg-zinc-50 transition-colors" {...props} />,
+  };
 
   return (
-    <div className="flex flex-col h-screen bg-[#f8f9fc] text-zinc-900 overflow-hidden font-sans">
+    <div className="flex flex-col h-screen bg-white font-sans text-zinc-900 overflow-hidden selection:bg-zinc-200">
       
-      <header className="flex-none flex items-center justify-between px-6 sm:px-8 py-4 bg-white border-b border-zinc-200 z-30 shadow-sm">
-        <div className="flex items-center gap-4">
-          <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center shadow-lg">
-            <Flame className="w-6 h-6 text-[#5897fb]" />
-          </div>
-          <div>
-            <h1 className="text-sm font-black uppercase tracking-tighter text-zinc-800 leading-none">Casa das Resistências</h1>
-            <div className="flex gap-4 mt-2">
-              {isLocalhost && (
-                <>
-                  <div className="flex items-center gap-1.5">
-                    <div className={`w-1.5 h-1.5 rounded-full ${stats.cpu > 50 ? 'bg-red-500 animate-pulse' : 'bg-emerald-500'}`}></div>
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase">CPU: {stats.cpu}%</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <div className={`w-1.5 h-1.5 rounded-full ${stats.ram > 80 ? 'bg-red-500 animate-pulse' : stats.ram > 50 ? 'bg-amber-400' : 'bg-emerald-500'}`}></div>
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase">RAM: {stats.ram}%</span>
-                  </div>
-                </>
-              )}
-              {!isLocalhost && (
-                <div className="flex items-center gap-1.5">
-                  <Activity className="w-3 h-3 text-emerald-500" />
-                  <span className="text-[10px] font-black text-emerald-600 uppercase">Sistema Online</span>
-                </div>
-              )}
-            </div>
-          </div>
+      {/* BARRA DE ACOMPANHAMENTO */}
+      <div className="bg-zinc-50 text-zinc-500 text-[10px] sm:text-xs py-2 px-6 flex justify-between items-center border-b border-zinc-100">
+        <div className="flex items-center gap-2">
+          {syncStatus === "online" && <><div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" /><span>Sistema Operante</span></>}
+          {syncStatus === "syncing" && <><Loader2 size={12} className="animate-spin" /><span>Baixando nuvem...</span></>}
+          {syncStatus === "error" && <><div className="w-1.5 h-1.5 bg-red-500 rounded-full" /><span>Erro Local (Verifique Terminal)</span></>}
         </div>
+        <button onClick={syncCatalog} disabled={syncStatus === "syncing"} className="flex items-center gap-1.5 hover:text-zinc-800 transition-colors">
+          <RefreshCw size={12} className={syncStatus === "syncing" ? "animate-spin" : ""}/> 
+          <span className="font-medium uppercase tracking-widest">Sincronizar Notion</span>
+        </button>
+      </div>
 
-        <div className="flex items-center gap-6">
-          <div className="hidden md:flex flex-col items-end min-w-[100px]">
-            <span className="text-[9px] font-black text-zinc-400 uppercase leading-none mb-1">Tokens da Sessão</span>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-black text-zinc-700">{sessionTokens.toLocaleString()}</span>
-              <div className="w-16 h-1 bg-zinc-100 rounded-full overflow-hidden border border-zinc-200">
-                <div className="h-full bg-[#5897fb] transition-all duration-500" style={{ width: `${tokenPercentage}%` }}></div>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex bg-zinc-100 p-1 rounded-xl border border-zinc-200">
-            <button onClick={() => setAiMode("cloud")} className={`flex items-center gap-2 px-4 py-2 text-[10px] font-bold rounded-lg transition-all ${aiMode === "cloud" ? "bg-white text-[#5897fb] shadow-sm" : "text-zinc-400"}`}>
-              <Cloud className="w-3.5 h-3.5" /> CLOUD
-            </button>
-            {isLocalhost && (
-              <button onClick={() => setAiMode("local")} className={`flex items-center gap-2 px-4 py-2 text-[10px] font-bold rounded-lg transition-all ${aiMode === "local" ? "bg-[#5897fb] text-white shadow-md" : "text-zinc-400"}`}>
-                <Activity className="w-3.5 h-3.5" /> LOCAL
-              </button>
-            )}
-          </div>
+      <header className="px-6 py-5 bg-white border-b border-zinc-100 flex justify-between items-center z-10">
+        <div className="flex items-center gap-3 cursor-pointer" onClick={() => { setStep("search"); setResults([]); setQuery(""); }}>
+          <Flame className="text-zinc-900 w-5 h-5" strokeWidth={2.5} />
+          <h1 className="font-semibold text-sm sm:text-base tracking-tight text-zinc-900">Casa das Resistências</h1>
         </div>
+        {step !== "search" && (
+          <button onClick={() => { setStep("search"); setResults([]); setQuery(""); }} className="text-xs font-medium text-zinc-500 hover:text-zinc-900 transition-colors flex items-center gap-2">
+            <Search size={14}/> Buscar
+          </button>
+        )}
       </header>
 
-      <main className="flex-1 overflow-y-auto px-4 py-8">
-        <div className="max-w-2xl mx-auto space-y-8">
-          {messages.map((m, index) => (
-            <div key={index} className={`flex gap-4 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-              {m.role === "assistant" && (
-                <div className="w-9 h-9 rounded-xl bg-white border border-zinc-200 flex items-center justify-center shrink-0 shadow-sm text-zinc-400">
-                  <Bot className="w-5 h-5" />
-                </div>
-              )}
-              <div className={`px-6 py-4 rounded-3xl shadow-md border ${
-                m.role === "user" 
-                ? "bg-[#007AFF] text-white border-[#0066CC] rounded-tr-none" 
-                : "bg-white text-zinc-700 border-zinc-200/50 rounded-tl-none"
-              } max-w-[95%] sm:max-w-[85%] overflow-x-auto`}>
-                {renderMessageContent(m.content, m.role === "assistant", index)}
+      <main className="flex-1 overflow-y-auto px-4 py-8 sm:p-12">
+        <div className="max-w-3xl mx-auto">
+          {step === "search" && (
+            <div className="py-12 space-y-10 animate-in fade-in duration-700">
+              <div className="text-center space-y-4">
+                <Factory size={32} className="text-zinc-300 mx-auto" strokeWidth={1.5} />
+                <h2 className="text-3xl sm:text-4xl font-semibold text-zinc-900 tracking-tight">Catálogo Técnico</h2>
+                <p className="text-zinc-500 text-sm font-light">Pesquise por modelo, aplicação ou característica técnica.</p>
               </div>
-              {m.role === "user" && (
-                <div className="w-9 h-9 rounded-xl bg-[#007AFF] flex items-center justify-center shrink-0 shadow-lg text-white">
-                  <User className="w-5 h-5" />
-                </div>
-              )}
-            </div>
-          ))}
-          {isLoading && (
-            <div className="flex gap-4 justify-start animate-pulse">
-              <div className="w-9 h-9 rounded-xl bg-zinc-200"></div>
-              <div className="px-6 py-4 rounded-3xl bg-white border border-zinc-200 flex items-center gap-3">
-                <Loader2 className="w-4 h-4 text-[#007AFF] animate-spin" />
-                <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">Lendo Catálogo...</span>
+              
+              <form onSubmit={handleSearch} className="relative max-w-2xl mx-auto">
+                <input 
+                  value={query} onChange={e => setQuery(e.target.value)}
+                  className="w-full bg-white border border-zinc-200 p-5 rounded-2xl outline-none focus:border-zinc-400 focus:ring-4 focus:ring-zinc-50 transition-all text-base font-light pr-16 placeholder:text-zinc-400"
+                  placeholder="Ex: Cartucho, Zamac, FZ-C..."
+                />
+                <button type="submit" className="absolute right-2 top-2 bottom-2 bg-zinc-900 text-white px-4 rounded-xl hover:bg-zinc-800 transition-colors flex items-center justify-center">
+                  {isLoading ? <Loader2 size={20} className="animate-spin" /> : <Search size={20} strokeWidth={2.5}/>}
+                </button>
+              </form>
+
+              <div className="grid grid-cols-1 gap-3 max-w-2xl mx-auto mt-6">
+                {results.map((prod) => (
+                  <button key={prod.id} onClick={() => viewProduct(prod)} className="flex items-center justify-between p-5 bg-white border border-zinc-200 rounded-2xl hover:border-zinc-400 hover:shadow-sm transition-all group text-left">
+                    <div className="space-y-1">
+                      <span className="text-zinc-500 text-[10px] font-medium uppercase tracking-widest">{prod.id}</span>
+                      <h3 className="font-semibold text-zinc-900 text-lg group-hover:text-zinc-700 transition-colors">{prod.nome}</h3>
+                      <p className="text-zinc-500 text-sm font-light">{prod.linha}</p>
+                    </div>
+                    <ArrowRight className="text-zinc-300 group-hover:text-zinc-800 group-hover:translate-x-1 transition-all" size={20} />
+                  </button>
+                ))}
               </div>
             </div>
           )}
-          <div ref={messagesEndRef} />
+
+          {step === "product" && selectedProduct && (
+            <div className="pb-24 animate-in slide-in-from-bottom-4 duration-500">
+              <div className="bg-white px-6 sm:px-12 py-10 rounded-3xl border border-zinc-200">
+                <span className="text-[10px] font-semibold text-zinc-400 uppercase tracking-widest mb-2 block">Ficha de Especificação</span>
+                <div className="w-full">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                    {formatMarkdownText(selectedProduct.texto)}
+                  </ReactMarkdown>
+                </div>
+                <div className="mt-16 pt-8 border-t border-zinc-100 flex flex-col sm:flex-row items-center justify-between gap-6">
+                  <div className="text-center sm:text-left">
+                    <h3 className="font-semibold text-zinc-900 text-lg">Projeto e Orçamento</h3>
+                    <p className="text-sm text-zinc-500 font-light mt-1">Configure esta peça com nossos engenheiros.</p>
+                  </div>
+                  <button onClick={startCommercialChat} className="w-full sm:w-auto bg-zinc-900 text-white px-8 py-4 rounded-xl font-medium hover:bg-zinc-800 transition-colors flex items-center justify-center gap-3">
+                    Iniciar Atendimento <ArrowRight size={18} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {step === "chat" && (
+            <div className="space-y-6 pb-32 animate-in slide-in-from-bottom-4 duration-500">
+              <div className="flex justify-center mb-8">
+                <span className="bg-zinc-50 text-zinc-500 text-[10px] font-semibold px-4 py-1.5 rounded-full uppercase tracking-widest border border-zinc-200">
+                  Ref: {selectedProduct?.id}
+                </span>
+              </div>
+              {messages.map((m, i) => {
+                let clean = m.content;
+                let opts = [];
+                if (m.role === "assistant") {
+                  const match = m.content.match(/\[OPCOES:\s*(.+?)\]/);
+                  if (match) {
+                    clean = m.content.replace(match[0], '').trim();
+                    opts = match[1].split(',').map(o => o.trim());
+                  }
+                }
+                const isLast = m.role === "assistant" && i === messages.length - 1;
+                return (
+                  <div key={i} className={`flex flex-col gap-2 ${m.role === "user" ? "items-end" : "items-start"}`}>
+                    <div className={`p-5 max-w-[90%] sm:max-w-[80%] leading-relaxed text-sm ${m.role === "user" ? "bg-zinc-900 text-white rounded-2xl rounded-tr-sm font-light" : "bg-white border border-zinc-200 rounded-2xl rounded-tl-sm text-zinc-700"}`}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{...markdownComponents, p: ({node, ...props}) => <p className="mb-2 last:mb-0" {...props} />}}>
+                        {clean}
+                      </ReactMarkdown>
+                    </div>
+                    {opts.length > 0 && isLast && !isLoading && (
+                      <div className="flex flex-wrap gap-2 mt-3">
+                        {opts.map((o, idx) => (
+                          <button key={idx} onClick={() => processMessage(o)} className="px-4 py-2 text-[11px] font-medium text-zinc-600 bg-white border border-zinc-200 rounded-lg hover:border-zinc-400 hover:text-zinc-900 transition-colors">
+                            {o}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {isLoading && (
+                <div className="flex justify-start items-center gap-3 p-4">
+                  <Loader2 className="animate-spin text-zinc-400" size={20} />
+                </div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+          )}
         </div>
       </main>
 
-      <footer className="flex-none p-6 bg-white border-t border-zinc-100">
-        <div className="max-w-2xl mx-auto">
-          <form onSubmit={(e) => { e.preventDefault(); processMessage(input); }} className="flex items-center bg-zinc-100 rounded-[2rem] p-1.5 border border-zinc-200 focus-within:ring-4 focus-within:ring-[#007AFF]/10 transition-all shadow-inner">
-            <input 
-              type="text" value={input} onChange={(e) => setInput(e.target.value)}
-              placeholder={aiMode === 'local' ? "Motor Local Ativo..." : "Dúvida técnica?"}
-              className="flex-1 bg-transparent px-5 py-3 outline-none text-sm font-medium"
-              disabled={isLoading}
-            />
-            <button type="submit" disabled={isLoading || !input.trim()} className="bg-[#007AFF] text-white p-3.5 rounded-full hover:scale-105 shadow-lg shadow-blue-200">
-              <Send className="w-5 h-5" />
+      {step === "chat" && (
+        <footer className="p-4 sm:p-6 bg-white border-t border-zinc-100 fixed bottom-0 w-full z-20">
+          <form onSubmit={(e) => { e.preventDefault(); processMessage(input); }} className="max-w-3xl mx-auto flex gap-2 relative">
+            <input value={input} onChange={e => setInput(e.target.value)} className="flex-1 bg-white px-5 py-4 rounded-xl outline-none text-sm font-light border border-zinc-200 focus:border-zinc-400 transition-all placeholder:text-zinc-400" placeholder="Digite sua mensagem..." disabled={isLoading}/>
+            <button type="submit" disabled={isLoading || !input.trim()} className="bg-zinc-900 text-white px-6 rounded-xl hover:bg-zinc-800 active:scale-95 transition-all disabled:opacity-50 flex items-center justify-center">
+              <Send size={18}/>
             </button>
           </form>
-          <div className="mt-4 text-center">
-             <p className="text-[8px] font-black uppercase tracking-[0.4em] text-zinc-300">Casa das Resistências • RAG Engine v3.0</p>
-          </div>
-        </div>
-      </footer>
+        </footer>
+      )}
     </div>
   );
 }
