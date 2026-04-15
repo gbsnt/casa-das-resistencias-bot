@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Flame, Loader2, Search, ArrowRight, RefreshCw, Factory, ClipboardList } from "lucide-react";
+import { Send, Flame, Loader2, Search, ArrowRight, RefreshCw, Factory, ClipboardList, Info } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import fuzzysort from "fuzzysort"; // Importação necessária
 
 export default function ChatPage() {
   const [step, setStep] = useState("search"); 
@@ -13,14 +14,41 @@ export default function ChatPage() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [syncStatus, setSyncStatus] = useState("online"); // online, syncing, error
+  const [syncStatus, setSyncStatus] = useState("online");
+  const [sugestao, setSugestao] = useState(null); // Estado para sugestão
   const messagesEndRef = useRef(null);
+
+  // Lista de termos técnicos para o "Você quis dizer?"
+  const termosTecnicos = [
+    "Fundida Zamac", "Cartucho", "Cartucho Fendilhado", "Coleira Mica", 
+    "Coleira Cerâmica", "Imersão Sobre Borda", "Infravermelho", 
+    "Termostato Capilar", "Fibra Cerâmica", "Tubular Aletada", 
+    "Aquecedor de Passagem", "Microtubular", "Manta de Silicone"
+  ];
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // 🔄 BOTÃO DE SINCRONIZAÇÃO REAL
+  // Lógica de Sugestão (Did you mean?)
+  const verificarSugestao = (termo) => {
+    if (termo.length < 3) {
+      setSugestao(null);
+      return;
+    }
+    const res = fuzzysort.go(termo, termosTecnicos, { threshold: -10000, limit: 1 });
+    if (res.length > 0 && res[0].score > -100) {
+      // Se ele já acertou quase perfeitamente, não sugere
+      if (res[0].score > -5) {
+        setSugestao(null);
+      } else {
+        setSugestao(res[0].target);
+      }
+    } else {
+      setSugestao(null);
+    }
+  };
+
   const syncCatalog = async () => {
     setSyncStatus("syncing");
     try {
@@ -28,7 +56,7 @@ export default function ChatPage() {
       const data = await res.json();
       if (data.success) {
         setSyncStatus("online");
-        alert(`Sucesso! Catálogo atualizado com ${data.count} produtos do Notion.`);
+        alert(`Sucesso! Catálogo atualizado com ${data.count} produtos.`);
       } else {
         setSyncStatus("error");
         alert("Erro na sincronização: " + data.error);
@@ -39,17 +67,26 @@ export default function ChatPage() {
     }
   };
 
-  const handleSearch = async (e) => {
-    e?.preventDefault();
-    if (!query.trim()) return;
+  const handleSearch = async (termoManual) => {
+    const termoFinal = termoManual || query;
+    if (!termoFinal.trim()) return;
+    
     setIsLoading(true);
     setResults([]);
+    setSugestao(null); // Limpa sugestão ao buscar
+
     try {
-      const res = await fetch("/api/search", { method: "POST", body: JSON.stringify({ query }) });
+      const res = await fetch("/api/search", { 
+        method: "POST", 
+        body: JSON.stringify({ query: termoFinal }) 
+      });
       const data = await res.json();
       setResults(data.resultados || []);
-    } catch (e) { console.error("Erro busca"); }
-    finally { setIsLoading(false); }
+    } catch (e) { 
+      console.error("Erro busca"); 
+    } finally { 
+      setIsLoading(false); 
+    }
   };
 
   const viewProduct = (product) => {
@@ -161,12 +198,12 @@ export default function ChatPage() {
       </div>
 
       <header className="px-6 py-5 bg-white border-b border-zinc-100 flex justify-between items-center z-10">
-        <div className="flex items-center gap-3 cursor-pointer" onClick={() => { setStep("search"); setResults([]); setQuery(""); }}>
+        <div className="flex items-center gap-3 cursor-pointer" onClick={() => { setStep("search"); setResults([]); setQuery(""); setSugestao(null); }}>
           <Flame className="text-zinc-900 w-5 h-5" strokeWidth={2.5} />
           <h1 className="font-semibold text-sm sm:text-base tracking-tight text-zinc-900">Casa das Resistências</h1>
         </div>
         {step !== "search" && (
-          <button onClick={() => { setStep("search"); setResults([]); setQuery(""); }} className="text-xs font-medium text-zinc-500 hover:text-zinc-900 transition-colors flex items-center gap-2">
+          <button onClick={() => { setStep("search"); setResults([]); setQuery(""); setSugestao(null); }} className="text-xs font-medium text-zinc-500 hover:text-zinc-900 transition-colors flex items-center gap-2">
             <Search size={14}/> Buscar
           </button>
         )}
@@ -182,16 +219,40 @@ export default function ChatPage() {
                 <p className="text-zinc-500 text-sm font-light">Pesquise por modelo, aplicação ou característica técnica.</p>
               </div>
               
-              <form onSubmit={handleSearch} className="relative max-w-2xl mx-auto">
-                <input 
-                  value={query} onChange={e => setQuery(e.target.value)}
-                  className="w-full bg-white border border-zinc-200 p-5 rounded-2xl outline-none focus:border-zinc-400 focus:ring-4 focus:ring-zinc-50 transition-all text-base font-light pr-16 placeholder:text-zinc-400"
-                  placeholder="Ex: Cartucho, Zamac, FZ-C..."
-                />
-                <button type="submit" className="absolute right-2 top-2 bottom-2 bg-zinc-900 text-white px-4 rounded-xl hover:bg-zinc-800 transition-colors flex items-center justify-center">
-                  {isLoading ? <Loader2 size={20} className="animate-spin" /> : <Search size={20} strokeWidth={2.5}/>}
-                </button>
-              </form>
+              <div className="max-w-2xl mx-auto">
+                <form onSubmit={(e) => { e.preventDefault(); handleSearch(); }} className="relative">
+                  <input 
+                    value={query} 
+                    onChange={e => {
+                      const val = e.target.value;
+                      setQuery(val);
+                      verificarSugestao(val);
+                    }}
+                    className="w-full bg-white border border-zinc-200 p-5 rounded-2xl outline-none focus:border-zinc-400 focus:ring-4 focus:ring-zinc-50 transition-all text-base font-light pr-16 placeholder:text-zinc-400"
+                    placeholder="Ex: Cartucho, Zamac, FZ-C..."
+                  />
+                  <button type="submit" className="absolute right-2 top-2 bottom-2 bg-zinc-900 text-white px-4 rounded-xl hover:bg-zinc-800 transition-colors flex items-center justify-center">
+                    {isLoading ? <Loader2 size={20} className="animate-spin" /> : <Search size={20} strokeWidth={2.5}/>}
+                  </button>
+                </form>
+
+                {/* UI DO "VOCÊ QUIS DIZER?" */}
+                {sugestao && (
+                  <div className="mt-3 px-5 flex items-center gap-2 text-sm text-zinc-500 animate-in fade-in slide-in-from-top-1">
+                    <Info size={14} className="text-orange-400" />
+                    <span>Você quis dizer: </span>
+                    <button 
+                      onClick={() => {
+                        setQuery(sugestao);
+                        handleSearch(sugestao);
+                      }}
+                      className="text-zinc-900 font-semibold underline decoration-zinc-300 hover:decoration-zinc-900 transition-all"
+                    >
+                      {sugestao}?
+                    </button>
+                  </div>
+                )}
+              </div>
 
               <div className="grid grid-cols-1 gap-3 max-w-2xl mx-auto mt-6">
                 {results.map((prod) => (
@@ -204,6 +265,12 @@ export default function ChatPage() {
                     <ArrowRight className="text-zinc-300 group-hover:text-zinc-800 group-hover:translate-x-1 transition-all" size={20} />
                   </button>
                 ))}
+                {query && results.length === 0 && !isLoading && (
+                  <div className="text-center py-12 border-2 border-dashed border-zinc-100 rounded-3xl">
+                    <ClipboardList size={40} className="mx-auto text-zinc-200 mb-4" />
+                    <p className="text-zinc-400 font-light">Nenhum resultado exato encontrado para "{query}".</p>
+                  </div>
+                )}
               </div>
             </div>
           )}
