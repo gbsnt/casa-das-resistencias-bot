@@ -71,16 +71,22 @@ export default function ChatPage() {
     const termoFinal = termoManual || query;
     if (!termoFinal.trim()) return;
     
+    // 1. LIMPEZA IMEDIATA: Mata os resultados anteriores antes de começar
+    setResults([]); 
     setIsLoading(true);
-    setResults([]);
-    setSugestao(null); // Limpa sugestão ao buscar
-
+    setSugestao(null);
+  
     try {
       const res = await fetch("/api/search", { 
         method: "POST", 
-        body: JSON.stringify({ query: termoFinal }) 
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: termoFinal }),
+        cache: 'no-store', // 2. ANTI-CACHE: Força o navegador a buscar dado novo sempre
       });
+      
       const data = await res.json();
+      
+      // 3. VALIDAÇÃO: Só atualiza se a query ainda for a mesma (evita atropelo de respostas)
       setResults(data.resultados || []);
     } catch (e) { 
       console.error("Erro busca"); 
@@ -255,23 +261,30 @@ export default function ChatPage() {
               </div>
 
               <div className="grid grid-cols-1 gap-3 max-w-2xl mx-auto mt-6">
-                {results.map((prod) => (
-                  <button key={prod.id} onClick={() => viewProduct(prod)} className="flex items-center justify-between p-5 bg-white border border-zinc-200 rounded-2xl hover:border-zinc-400 hover:shadow-sm transition-all group text-left">
-                    <div className="space-y-1">
-                      <span className="text-zinc-500 text-[10px] font-medium uppercase tracking-widest">{prod.id}</span>
-                      <h3 className="font-semibold text-zinc-900 text-lg group-hover:text-zinc-700 transition-colors">{prod.nome}</h3>
-                      <p className="text-zinc-500 text-sm font-light">{prod.linha}</p>
-                    </div>
-                    <ArrowRight className="text-zinc-300 group-hover:text-zinc-800 group-hover:translate-x-1 transition-all" size={20} />
-                  </button>
-                ))}
-                {query && results.length === 0 && !isLoading && (
-                  <div className="text-center py-12 border-2 border-dashed border-zinc-100 rounded-3xl">
-                    <ClipboardList size={40} className="mx-auto text-zinc-200 mb-4" />
-                    <p className="text-zinc-400 font-light">Nenhum resultado exato encontrado para "{query}".</p>
-                  </div>
-                )}
-              </div>
+  {results.map((prod) => (
+    <button 
+      key={prod.id} 
+      onClick={() => viewProduct(prod)} 
+      className="flex items-center justify-between p-5 bg-white border border-zinc-200 rounded-2xl hover:border-zinc-400 hover:shadow-sm transition-all group text-left"
+    >
+      <div className="space-y-1 pr-4">
+        <div className="flex items-center gap-2">
+           <span className="text-zinc-500 text-[10px] font-medium uppercase tracking-widest">{prod.id}</span>
+           <span className="text-zinc-300 text-[10px]">•</span>
+           <span className="text-zinc-400 text-[10px] font-medium uppercase tracking-widest">{prod.linha}</span>
+        </div>
+        <h3 className="font-semibold text-zinc-900 text-lg group-hover:text-zinc-700 transition-colors">
+          {prod.nome}
+        </h3>
+        {/* BREVE DESCRITIVO ADICIONADO AQUI */}
+        <p className="text-zinc-500 text-xs font-light line-clamp-2 leading-relaxed">
+          {prod.descricaoCurta}
+        </p>
+      </div>
+      <ArrowRight className="text-zinc-300 group-hover:text-zinc-800 group-hover:translate-x-1 transition-all shrink-0" size={20} />
+    </button>
+  ))}
+</div>
             </div>
           )}
 
