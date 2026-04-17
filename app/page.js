@@ -1,10 +1,10 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Flame, Loader2, Search, ArrowRight, RefreshCw, Factory, ClipboardList, Info } from "lucide-react";
+import { Send, Flame, Loader2, Search, ArrowRight, RefreshCw, Factory, Info, FileText, Beaker, ChevronLeft, Layers, Tag } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import fuzzysort from "fuzzysort"; // Importação necessária
+import fuzzysort from "fuzzysort";
 
 export default function ChatPage() {
   const [step, setStep] = useState("search"); 
@@ -15,10 +15,9 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [syncStatus, setSyncStatus] = useState("online");
-  const [sugestao, setSugestao] = useState(null); // Estado para sugestão
+  const [sugestao, setSugestao] = useState(null);
   const messagesEndRef = useRef(null);
 
-  // Lista de termos técnicos para o "Você quis dizer?"
   const termosTecnicos = [
     "Fundida Zamac", "Cartucho", "Cartucho Fendilhado", "Coleira Mica", 
     "Coleira Cerâmica", "Imersão Sobre Borda", "Infravermelho", 
@@ -30,23 +29,47 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Lógica de Sugestão (Did you mean?)
-  const verificarSugestao = (termo) => {
-    if (termo.length < 3) {
-      setSugestao(null);
-      return;
-    }
-    const res = fuzzysort.go(termo, termosTecnicos, { threshold: -10000, limit: 1 });
-    if (res.length > 0 && res[0].score > -100) {
-      // Se ele já acertou quase perfeitamente, não sugere
-      if (res[0].score > -5) {
-        setSugestao(null);
-      } else {
-        setSugestao(res[0].target);
-      }
-    } else {
-      setSugestao(null);
-    }
+  // --- NAVEGAÇÃO ---
+  const handleSearch = async (termoManual) => {
+    const termoFinal = (termoManual || query).trim();
+    if (!termoFinal) return;
+    setResults([]); 
+    setIsLoading(true);
+    setStep("search"); 
+    try {
+      const res = await fetch("/api/search", { 
+        method: "POST", 
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: termoFinal }),
+      });
+      const data = await res.json();
+      setResults(data.resultados || []);
+      setQuery(termoFinal);
+    } catch (e) { console.error(e); } 
+    finally { setIsLoading(false); }
+  };
+
+  const viewProduct = (product) => {
+    setSelectedProduct(product);
+    setStep("product");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const goToProductById = async (id) => {
+    if (!id) return;
+    setIsLoading(true);
+    try {
+      const res = await fetch("/api/search", { 
+        method: "POST", 
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: id.trim() }),
+      });
+      const data = await res.json();
+      const match = data.resultados.find(p => p.id.toUpperCase() === id.trim().toUpperCase());
+      if (match) viewProduct(match);
+      else if (data.resultados.length > 0) viewProduct(data.resultados[0]);
+    } catch (e) { console.error(e); } 
+    finally { setIsLoading(false); }
   };
 
   const syncCatalog = async () => {
@@ -54,58 +77,9 @@ export default function ChatPage() {
     try {
       const res = await fetch("/api/sync");
       const data = await res.json();
-      if (data.success) {
-        setSyncStatus("online");
-        alert(`Sucesso! Catálogo atualizado com ${data.count} produtos.`);
-      } else {
-        setSyncStatus("error");
-        alert("Erro na sincronização: " + data.error);
-      }
-    } catch (e) {
-      setSyncStatus("error");
-      alert("Erro ao conectar com servidor.");
-    }
-  };
-
-  const handleSearch = async (termoManual) => {
-    const termoFinal = termoManual || query;
-    if (!termoFinal.trim()) return;
-    
-    // 1. LIMPEZA IMEDIATA: Mata os resultados anteriores antes de começar
-    setResults([]); 
-    setIsLoading(true);
-    setSugestao(null);
-  
-    try {
-      const res = await fetch("/api/search", { 
-        method: "POST", 
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: termoFinal }),
-        cache: 'no-store', // 2. ANTI-CACHE: Força o navegador a buscar dado novo sempre
-      });
-      
-      const data = await res.json();
-      
-      // 3. VALIDAÇÃO: Só atualiza se a query ainda for a mesma (evita atropelo de respostas)
-      setResults(data.resultados || []);
-    } catch (e) { 
-      console.error("Erro busca"); 
-    } finally { 
-      setIsLoading(false); 
-    }
-  };
-
-  const viewProduct = (product) => {
-    setSelectedProduct(product);
-    setStep("product");
-  };
-
-  const startCommercialChat = () => {
-    setStep("chat");
-    setMessages([{
-      role: "assistant",
-      content: `Olá. Sou o especialista comercial da Casa das Resistências. Para montarmos a proposta do modelo **${selectedProduct.nome}**, qual a quantidade de peças que você precisa? E quais as medidas exatas? [OPCOES: Orçar 10 peças, Tenho um desenho técnico, Falar com Vendedor]`
-    }]);
+      if (data.success) setSyncStatus("online");
+      else setSyncStatus("error");
+    } catch (e) { setSyncStatus("error"); }
   };
 
   const processMessage = async (text) => {
@@ -114,195 +88,234 @@ export default function ChatPage() {
     setMessages(newMsgs);
     setInput("");
     setIsLoading(true);
-
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: newMsgs, productName: selectedProduct.nome })
       });
       const data = await res.json();
       setMessages(prev => [...prev, { role: "assistant", content: data.content }]);
-    } catch (e) {
-      setMessages(prev => [...prev, { role: "assistant", content: "Erro de conexão." }]);
-    } finally { setIsLoading(false); }
+    } catch (e) { setMessages(prev => [...prev, { role: "assistant", content: "Erro de conexão." }]); } 
+    finally { setIsLoading(false); }
   };
 
-  const formatMarkdownText = (text) => {
+  // --- O TRANSFORMADOR (VERSÃO BLINDADA CONTRA NEGRITOS E ESPAÇOS) ---
+  const formatMarkdownText = (text, productName = "") => {
     if (!text) return "";
     let formatted = text;
 
+    // Normalização inicial para remover espaços invisíveis do Notion
+    formatted = formatted.replace(/\u00A0/g, ' '); 
+
+    const isLinhaGeral = productName.toLowerCase().includes("linha geral");
+
+    // 1. Corrige títulos ##
+    formatted = formatted.replace(/^(#{1,6})([^#\s])/gm, '$1 $2');
+
+    // 2. 🛠️ LIMPEZA E CRIAÇÃO DE BOTÕES DE CATEGORIA/LINHA
+    // Remove negritos das chaves e captura os valores
+    formatted = formatted.replace(/(?:\*\*|)?Categoria:(?:\*\*|)?\s*([^*|\n\r]+)/gi, (match, val) => {
+      return `\n\n@@INFO_CATEGORIA:${val.trim()}@@\n\n`;
+    });
+
+    formatted = formatted.replace(/(?:\|?\s*(?:\*\*|)?Linha:(?:\*\*|)?)\s*([^*|\n\r]+)/gi, (match, val) => {
+      const cleanVal = val.trim();
+      if (isLinhaGeral) return ""; // Não mostra botão de linha se já estiver nela
+      return `\n\n@@FILTRO_LINHA:${cleanVal}@@\n\n`;
+    });
+
+    // 3. Modelos Disponíveis
     formatted = formatted.replace(
-      /## Especificações Técnicas\n([\s\S]*?)(?=\n##|$)/g,
+      /MODELOS DISPONÍVEIS\n([\s\S]*?)(?=\n##|$)/gi,
       (match, content) => {
-        const rows = content.split('\n').filter(line => line.trim().startsWith('-')).map(line => {
-          const cleanLine = line.replace(/^- /, '');
-          const splitMatch = cleanLine.match(/^(.*?):(.*)$/);
-          if (splitMatch) {
-            const key = splitMatch[1].replace(/\*\*/g, '').trim();
-            const val = splitMatch[2].replace(/\*\*/g, '').trim();
-            return `| **${key}** | ${val} |`;
-          }
-          return `| ${cleanLine} | |`;
-        });
-        if (rows.length === 0) return match;
-        return `## Especificações Técnicas\n\n| Característica | Detalhe Técnico |\n|---|---|\n${rows.join('\n')}\n\n`;
+        const lines = content.split('\n').filter(l => l.includes(':'));
+        const buttons = lines.map(line => {
+          const parts = line.replace(/^- /, '').split(':');
+          const id = parts[0].trim();
+          const desc = parts[1]?.trim() || "";
+          return `\n\n@@BOTÃO_MODELO:${id}:${desc}@@\n\n`;
+        }).join('');
+        return `\n## Modelos Disponíveis\n${buttons}`;
       }
     );
 
+    // 4. Tabelas Técnicas
     formatted = formatted.replace(
-      /## Códigos para Pedido \(SKU\)\n([\s\S]*?)(?=\n##|$)/g,
+      /## Especificações Técnicas\n([\s\S]*?)(?=\n##|$)/g,
       (match, content) => {
-        const rows = content.split('\n').filter(line => line.trim().startsWith('-')).map(line => {
-          const cleanLine = line.replace(/^- /, '');
-          const splitMatch = cleanLine.split('→');
-          if (splitMatch.length >= 2) {
-            return `| ${splitMatch[0].trim()} | **${splitMatch[1].trim()}** |`;
-          }
+        let cleanedContent = content.replace(/\.\s?\*\*/g, '.\n- **'); 
+        if (!cleanedContent.trim().startsWith('-')) cleanedContent = '- ' + cleanedContent;
+        const rows = cleanedContent.split('\n').filter(line => line.includes('**')).map(line => {
+          const cleanLine = line.replace(/^- /, '').trim();
+          const splitMatch = cleanLine.match(/^\*\*(.*?)\*\*(.*)$/);
+          if (splitMatch) return `| **${splitMatch[1].trim()}** | ${splitMatch[2].trim()} |`;
           return `| ${cleanLine} | |`;
         });
-        if (rows.length === 0) return match;
-        return `## Códigos para Pedido (SKU)\n\n| Modelo / Medidas | Código SKU |\n|---|---|\n${rows.join('\n')}\n\n`;
+        return `\n## Especificações Técnicas\n\n| Característica | Detalhe |\n|---|---|\n${rows.join('\n')}\n\n`;
       }
     );
 
     return formatted;
   };
 
+  // --- COMPONENTES ---
   const markdownComponents = {
-    h1: ({node, ...props}) => <h1 className="text-2xl sm:text-3xl font-semibold text-zinc-900 border-b border-zinc-100 pb-6 mb-8" {...props} />,
-    h2: ({node, ...props}) => <h2 className="text-sm font-semibold text-zinc-500 mt-10 mb-4 uppercase tracking-widest" {...props} />,
-    h3: ({node, ...props}) => <h3 className="text-base font-semibold text-zinc-800 mt-6 mb-3" {...props} />,
-    p: ({node, ...props}) => <p className="mb-4 leading-relaxed text-zinc-600 font-light" {...props} />,
-    strong: ({node, ...props}) => <strong className="font-semibold text-zinc-900" {...props} />,
-    ul: ({node, ...props}) => <ul className="list-disc pl-5 space-y-2 mb-8 text-zinc-600 font-light marker:text-zinc-300" {...props} />,
-    li: ({node, ...props}) => <li className="pl-1" {...props} />,
+    h1: ({node, ...props}) => <h1 className="text-2xl font-bold text-zinc-900 border-b pb-4 mb-6" {...props} />,
+    h2: ({node, ...props}) => <h2 className="text-xs font-bold text-zinc-400 mt-10 mb-4 uppercase tracking-[0.2em]" {...props} />,
+    h3: ({node, ...props}) => <h3 className="text-base font-bold text-zinc-800 mt-6 mb-3" {...props} />,
+    p: ({node, children, ...props}) => {
+      // Função para extrair texto de dentro de possíveis tags strong/em
+      const flatten = (parts) => {
+        return parts.map(part => {
+          if (typeof part === 'string') return part;
+          if (part.props && part.props.children) return flatten(Array.isArray(part.props.children) ? part.props.children : [part.props.children]);
+          return '';
+        }).join('');
+      };
+
+      const contentString = Array.isArray(children) ? flatten(children) : (typeof children === 'string' ? children : '');
+
+      // RENDER: CATEGORIA
+      if (contentString.includes('@@INFO_CATEGORIA:')) {
+        const valor = contentString.replace(/@@INFO_CATEGORIA:|@@/g, '').trim();
+        return (
+          <div className="flex items-center gap-2 mb-2">
+            <Tag size={12} className="text-zinc-400" />
+            <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Setor: {valor}</span>
+          </div>
+        );
+      }
+
+      // RENDER: LINHA (Botão de Retorno para Família)
+      if (contentString.includes('@@FILTRO_LINHA:')) {
+        const valor = contentString.replace(/@@FILTRO_LINHA:|@@/g, '').trim();
+        return (
+          <div className="flex items-center gap-4 mb-8 bg-zinc-900 p-4 rounded-2xl shadow-xl shadow-zinc-200 group cursor-pointer hover:bg-zinc-800 transition-all" onClick={() => handleSearch(valor)}>
+            <div className="bg-white/10 text-white p-2.5 rounded-xl"><Layers size={18} /></div>
+            <div className="flex flex-col flex-1">
+              <span className="text-[9px] text-zinc-400 uppercase font-bold tracking-widest">Voltar para a Linha</span>
+              <span className="text-sm font-bold text-white uppercase">{valor}</span>
+            </div>
+            <ArrowRight size={18} className="text-zinc-500 group-hover:text-white transition-colors" />
+          </div>
+        );
+      }
+
+      // RENDER: BOTÃO DE MODELO
+      if (contentString.includes('@@BOTÃO_MODELO:')) {
+        const parts = contentString.replace(/@@/g, '').split(':');
+        const id = parts[1]?.trim();
+        const desc = parts[2]?.trim();
+        if (!id) return null;
+        return (
+          <button 
+            type="button"
+            key={id}
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); goToProductById(id); }}
+            className="w-full flex items-center justify-between p-5 mb-3 bg-white border border-zinc-200 rounded-2xl hover:border-zinc-900 transition-all group text-left shadow-sm"
+          >
+            <div className="flex flex-col">
+              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Ficha Técnica</span>
+              <span className="text-sm font-bold text-zinc-800 uppercase">{id} - {desc}</span>
+            </div>
+            <div className="bg-zinc-50 p-2 rounded-xl group-hover:bg-zinc-900 group-hover:text-white transition-colors"><ArrowRight size={20} /></div>
+          </button>
+        );
+      }
+      return <p className="mb-4 leading-relaxed text-zinc-600 font-light" {...props}>{children}</p>;
+    },
+    ul: ({node, ...props}) => <ul className="list-disc pl-5 space-y-2 mb-8 text-zinc-600 font-light" {...props} />,
     table: ({node, ...props}) => (
-      <div className="overflow-x-auto my-8 border border-zinc-200 rounded-lg">
-        <table className="min-w-full text-sm text-left bg-white" {...props} />
+      <div className="overflow-x-auto my-6 border border-zinc-200 rounded-xl">
+        <table className="min-w-full text-sm text-left bg-white border-collapse" {...props} />
       </div>
     ),
-    thead: ({node, ...props}) => <thead className="bg-zinc-50 border-b border-zinc-200" {...props} />,
-    th: ({node, ...props}) => <th className="p-4 font-medium text-[11px] uppercase text-zinc-500 tracking-wider" {...props} />,
+    th: ({node, ...props}) => <th className="p-4 bg-zinc-50 font-bold text-[10px] uppercase text-zinc-400 border-b border-zinc-200" {...props} />,
     td: ({node, ...props}) => <td className="p-4 border-b border-zinc-100 text-zinc-600 font-light" {...props} />,
-    tr: ({node, ...props}) => <tr className="even:bg-zinc-50/30 hover:bg-zinc-50 transition-colors" {...props} />,
   };
 
   return (
-    <div className="flex flex-col h-screen bg-white font-sans text-zinc-900 overflow-hidden selection:bg-zinc-200">
+    <div className="flex flex-col h-screen bg-white font-sans text-zinc-900 overflow-hidden">
       
-      {/* BARRA DE ACOMPANHAMENTO */}
-      <div className="bg-zinc-50 text-zinc-500 text-[10px] sm:text-xs py-2 px-6 flex justify-between items-center border-b border-zinc-100">
-        <div className="flex items-center gap-2">
-          {syncStatus === "online" && <><div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" /><span>Sistema Operante</span></>}
-          {syncStatus === "syncing" && <><Loader2 size={12} className="animate-spin" /><span>Baixando nuvem...</span></>}
-          {syncStatus === "error" && <><div className="w-1.5 h-1.5 bg-red-500 rounded-full" /><span>Erro Local (Verifique Terminal)</span></>}
+      <div className="bg-zinc-50 text-zinc-500 text-[10px] py-2 px-6 flex justify-between items-center border-b border-zinc-100">
+        <div className="flex items-center gap-2 font-medium uppercase tracking-widest">
+          <div className={`w-1.5 h-1.5 rounded-full ${syncStatus === "online" ? "bg-emerald-400 animate-pulse" : "bg-zinc-300"}`} />
+          <span>Sistema Operante</span>
         </div>
-        <button onClick={syncCatalog} disabled={syncStatus === "syncing"} className="flex items-center gap-1.5 hover:text-zinc-800 transition-colors">
+        <button onClick={syncCatalog} disabled={syncStatus === "syncing"} className="flex items-center gap-1.5 hover:text-zinc-800 uppercase tracking-widest">
           <RefreshCw size={12} className={syncStatus === "syncing" ? "animate-spin" : ""}/> 
-          <span className="font-medium uppercase tracking-widest">Sincronizar Notion</span>
+          Sincronizar Notion
         </button>
       </div>
 
-      <header className="px-6 py-5 bg-white border-b border-zinc-100 flex justify-between items-center z-10">
-        <div className="flex items-center gap-3 cursor-pointer" onClick={() => { setStep("search"); setResults([]); setQuery(""); setSugestao(null); }}>
+      <header className="px-6 py-5 bg-white border-b border-zinc-100 flex justify-between items-center">
+        <div className="flex items-center gap-3 cursor-pointer" onClick={() => {setStep("search"); setResults([]); setQuery("");}}>
           <Flame className="text-zinc-900 w-5 h-5" strokeWidth={2.5} />
-          <h1 className="font-semibold text-sm sm:text-base tracking-tight text-zinc-900">Casa das Resistências</h1>
+          <h1 className="font-bold text-xs tracking-widest uppercase">Casa das Resistências</h1>
         </div>
         {step !== "search" && (
-          <button onClick={() => { setStep("search"); setResults([]); setQuery(""); setSugestao(null); }} className="text-xs font-medium text-zinc-500 hover:text-zinc-900 transition-colors flex items-center gap-2">
-            <Search size={14}/> Buscar
-          </button>
+           <button onClick={() => setStep("search")} className="flex items-center gap-2 text-zinc-400 hover:text-zinc-900 text-[10px] font-bold uppercase tracking-widest">
+             <ChevronLeft size={14} /> Voltar
+           </button>
         )}
       </header>
 
-      <main className="flex-1 overflow-y-auto px-4 py-8 sm:p-12">
+      <main className="flex-1 overflow-y-auto px-4 py-8 sm:px-12">
         <div className="max-w-3xl mx-auto">
+          
           {step === "search" && (
-            <div className="py-12 space-y-10 animate-in fade-in duration-700">
+            <div className="py-8 space-y-10 animate-in fade-in">
               <div className="text-center space-y-4">
-                <Factory size={32} className="text-zinc-300 mx-auto" strokeWidth={1.5} />
-                <h2 className="text-3xl sm:text-4xl font-semibold text-zinc-900 tracking-tight">Catálogo Técnico</h2>
-                <p className="text-zinc-500 text-sm font-light">Pesquise por modelo, aplicação ou característica técnica.</p>
+                <Factory size={32} className="text-zinc-200 mx-auto" />
+                <h2 className="text-3xl font-bold text-zinc-900 tracking-tighter uppercase text-center">Catálogo Técnico</h2>
+                <p className="text-zinc-400 text-sm font-light italic text-center">Engenharia de Aquecimento Industrial</p>
               </div>
               
-              <div className="max-w-2xl mx-auto">
-                <form onSubmit={(e) => { e.preventDefault(); handleSearch(); }} className="relative">
-                  <input 
-                    value={query} 
-                    onChange={e => {
-                      const val = e.target.value;
-                      setQuery(val);
-                      verificarSugestao(val);
-                    }}
-                    className="w-full bg-white border border-zinc-200 p-5 rounded-2xl outline-none focus:border-zinc-400 focus:ring-4 focus:ring-zinc-50 transition-all text-base font-light pr-16 placeholder:text-zinc-400"
-                    placeholder="Ex: Cartucho, Zamac, FZ-C..."
-                  />
-                  <button type="submit" className="absolute right-2 top-2 bottom-2 bg-zinc-900 text-white px-4 rounded-xl hover:bg-zinc-800 transition-colors flex items-center justify-center">
-                    {isLoading ? <Loader2 size={20} className="animate-spin" /> : <Search size={20} strokeWidth={2.5}/>}
+              <div className="max-w-2xl mx-auto relative">
+                <form onSubmit={(e) => { e.preventDefault(); handleSearch(); }}>
+                  <input value={query} onChange={e => { setQuery(e.target.value); }} className="w-full bg-white border border-zinc-200 p-5 rounded-2xl outline-none focus:border-zinc-900 transition-all font-light shadow-sm" placeholder="Busque por modelo ou aplicação..." />
+                  <button type="submit" className="absolute right-3 top-3 bottom-3 bg-zinc-900 text-white px-5 rounded-xl">
+                    {isLoading ? <Loader2 size={18} className="animate-spin" /> : <Search size={18} />}
                   </button>
                 </form>
-
-                {/* UI DO "VOCÊ QUIS DIZER?" */}
-                {sugestao && (
-                  <div className="mt-3 px-5 flex items-center gap-2 text-sm text-zinc-500 animate-in fade-in slide-in-from-top-1">
-                    <Info size={14} className="text-orange-400" />
-                    <span>Você quis dizer: </span>
-                    <button 
-                      onClick={() => {
-                        setQuery(sugestao);
-                        handleSearch(sugestao);
-                      }}
-                      className="text-zinc-900 font-semibold underline decoration-zinc-300 hover:decoration-zinc-900 transition-all"
-                    >
-                      {sugestao}?
-                    </button>
-                  </div>
-                )}
               </div>
 
-              <div className="grid grid-cols-1 gap-3 max-w-2xl mx-auto mt-6">
-  {results.map((prod) => (
-    <button 
-      key={prod.id} 
-      onClick={() => viewProduct(prod)} 
-      className="flex items-center justify-between p-5 bg-white border border-zinc-200 rounded-2xl hover:border-zinc-400 hover:shadow-sm transition-all group text-left"
-    >
-      <div className="space-y-1 pr-4">
-        <div className="flex items-center gap-2">
-           <span className="text-zinc-500 text-[10px] font-medium uppercase tracking-widest">{prod.id}</span>
-           <span className="text-zinc-300 text-[10px]">•</span>
-           <span className="text-zinc-400 text-[10px] font-medium uppercase tracking-widest">{prod.linha}</span>
-        </div>
-        <h3 className="font-semibold text-zinc-900 text-lg group-hover:text-zinc-700 transition-colors">
-          {prod.nome}
-        </h3>
-        {/* BREVE DESCRITIVO ADICIONADO AQUI */}
-        <p className="text-zinc-500 text-xs font-light line-clamp-2 leading-relaxed">
-          {prod.descricaoCurta}
-        </p>
-      </div>
-      <ArrowRight className="text-zinc-300 group-hover:text-zinc-800 group-hover:translate-x-1 transition-all shrink-0" size={20} />
-    </button>
-  ))}
-</div>
+              <div className="grid grid-cols-1 gap-3 max-w-2xl mx-auto">
+                {results.map((prod) => (
+                  <button key={prod.id} onClick={() => viewProduct(prod)} className="flex items-center justify-between p-6 bg-white border border-zinc-200 rounded-2xl hover:border-zinc-900 hover:shadow-lg transition-all text-left group">
+                    <div className="space-y-2">
+                      <div className="flex gap-2 text-[9px] font-bold uppercase tracking-tighter text-zinc-400">
+                        <span>{prod.id}</span> <span>•</span> <span>{prod.linha}</span>
+                      </div>
+                      <h3 className="font-bold text-zinc-900 text-lg leading-tight uppercase group-hover:text-zinc-700">{prod.nome}</h3>
+                      <p className="text-zinc-500 text-xs font-light line-clamp-3 leading-relaxed max-w-md">{prod.descricaoCurta}</p>
+                    </div>
+                    <ArrowRight className="text-zinc-200 group-hover:text-zinc-900 transition-all group-hover:translate-x-1" />
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 
           {step === "product" && selectedProduct && (
-            <div className="pb-24 animate-in slide-in-from-bottom-4 duration-500">
-              <div className="bg-white px-6 sm:px-12 py-10 rounded-3xl border border-zinc-200">
-                <span className="text-[10px] font-semibold text-zinc-400 uppercase tracking-widest mb-2 block">Ficha de Especificação</span>
-                <div className="w-full">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                    {formatMarkdownText(selectedProduct.texto)}
-                  </ReactMarkdown>
-                </div>
-                <div className="mt-16 pt-8 border-t border-zinc-100 flex flex-col sm:flex-row items-center justify-between gap-6">
-                  <div className="text-center sm:text-left">
-                    <h3 className="font-semibold text-zinc-900 text-lg">Projeto e Orçamento</h3>
-                    <p className="text-sm text-zinc-500 font-light mt-1">Configure esta peça com nossos engenheiros.</p>
+            <div className="animate-in slide-in-from-bottom-4 duration-500">
+              <div className="bg-white p-8 sm:p-12 rounded-[2.5rem] border border-zinc-200 shadow-sm relative overflow-hidden">
+                {isLoading && (
+                  <div className="absolute inset-0 bg-white/60 backdrop-blur-sm z-50 flex items-center justify-center">
+                    <Loader2 className="animate-spin text-zinc-900" size={32} />
                   </div>
-                  <button onClick={startCommercialChat} className="w-full sm:w-auto bg-zinc-900 text-white px-8 py-4 rounded-xl font-medium hover:bg-zinc-800 transition-colors flex items-center justify-center gap-3">
+                )}
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                  {formatMarkdownText(selectedProduct.texto, selectedProduct.nome)}
+                </ReactMarkdown>
+                
+                <div className="mt-12 pt-10 border-t border-zinc-100 flex flex-col sm:flex-row gap-6 items-center justify-between">
+                  <div className="text-center sm:text-left">
+                    <h4 className="font-bold text-zinc-900 uppercase">Configurar Projeto</h4>
+                    <p className="text-sm text-zinc-400 font-light mt-1">Coleta técnica de medidas e potência.</p>
+                  </div>
+                  <button onClick={() => { setStep("chat"); setMessages([{ role: "assistant", content: `Olá! Sou o consultor técnico. Para orçarmos a **${selectedProduct.nome}**, qual a aplicação e a temperatura de operação desejada? [OPCOES: Uso Industrial, Máquina Injetora, Enviar Desenho]` }]); }} className="w-full sm:w-auto bg-zinc-900 text-white px-10 py-5 rounded-2xl font-bold flex items-center gap-3 hover:bg-zinc-800 transition-all shadow-xl shadow-zinc-200">
                     Iniciar Atendimento <ArrowRight size={18} />
                   </button>
                 </div>
@@ -311,34 +324,27 @@ export default function ChatPage() {
           )}
 
           {step === "chat" && (
-            <div className="space-y-6 pb-32 animate-in slide-in-from-bottom-4 duration-500">
-              <div className="flex justify-center mb-8">
-                <span className="bg-zinc-50 text-zinc-500 text-[10px] font-semibold px-4 py-1.5 rounded-full uppercase tracking-widest border border-zinc-200">
-                  Ref: {selectedProduct?.id}
-                </span>
-              </div>
+            <div className="space-y-6 pb-40">
               {messages.map((m, i) => {
                 let clean = m.content;
                 let opts = [];
-                if (m.role === "assistant") {
-                  const match = m.content.match(/\[OPCOES:\s*(.+?)\]/);
-                  if (match) {
-                    clean = m.content.replace(match[0], '').trim();
-                    opts = match[1].split(',').map(o => o.trim());
-                  }
+                const match = m.content.match(/\[OPCOES:\s*(.+?)\]/);
+                if (match) {
+                  clean = m.content.replace(match[0], '').trim();
+                  opts = match[1].split(',').map(o => o.trim());
                 }
-                const isLast = m.role === "assistant" && i === messages.length - 1;
+                const isLast = i === messages.length - 1;
                 return (
-                  <div key={i} className={`flex flex-col gap-2 ${m.role === "user" ? "items-end" : "items-start"}`}>
-                    <div className={`p-5 max-w-[90%] sm:max-w-[80%] leading-relaxed text-sm ${m.role === "user" ? "bg-zinc-900 text-white rounded-2xl rounded-tr-sm font-light" : "bg-white border border-zinc-200 rounded-2xl rounded-tl-sm text-zinc-700"}`}>
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{...markdownComponents, p: ({node, ...props}) => <p className="mb-2 last:mb-0" {...props} />}}>
-                        {clean}
-                      </ReactMarkdown>
+                  <div key={i} className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start animate-in slide-in-from-left-2"}`}>
+                    <div className={`p-5 max-w-[85%] rounded-2xl text-sm leading-relaxed ${m.role === "user" ? "bg-zinc-900 text-white shadow-xl shadow-zinc-100" : "bg-white border border-zinc-200 shadow-sm text-zinc-800"}`}>
+                       <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{clean}</ReactMarkdown>
                     </div>
                     {opts.length > 0 && isLast && !isLoading && (
-                      <div className="flex flex-wrap gap-2 mt-3">
+                      <div className="flex flex-wrap gap-2 mt-4">
                         {opts.map((o, idx) => (
-                          <button key={idx} onClick={() => processMessage(o)} className="px-4 py-2 text-[11px] font-medium text-zinc-600 bg-white border border-zinc-200 rounded-lg hover:border-zinc-400 hover:text-zinc-900 transition-colors">
+                          <button key={idx} onClick={() => processMessage(o)} className={`px-4 py-3 rounded-xl text-xs font-bold transition-all ${o.toLowerCase().includes("desenho") || o.toLowerCase().includes("amostra") ? "bg-zinc-100 text-zinc-900 border-2 border-zinc-900 hover:bg-zinc-200" : "bg-white text-zinc-500 border border-zinc-200 hover:border-zinc-900 hover:text-zinc-900"}`}>
+                            {o.toLowerCase().includes("desenho") && <FileText size={14} className="inline mr-2" />}
+                            {o.toLowerCase().includes("amostra") && <Beaker size={14} className="inline mr-2" />}
                             {o}
                           </button>
                         ))}
@@ -347,11 +353,7 @@ export default function ChatPage() {
                   </div>
                 );
               })}
-              {isLoading && (
-                <div className="flex justify-start items-center gap-3 p-4">
-                  <Loader2 className="animate-spin text-zinc-400" size={20} />
-                </div>
-              )}
+              {isLoading && <Loader2 className="animate-spin text-zinc-300 mx-auto mt-4" />}
               <div ref={messagesEndRef} />
             </div>
           )}
@@ -359,12 +361,10 @@ export default function ChatPage() {
       </main>
 
       {step === "chat" && (
-        <footer className="p-4 sm:p-6 bg-white border-t border-zinc-100 fixed bottom-0 w-full z-20">
-          <form onSubmit={(e) => { e.preventDefault(); processMessage(input); }} className="max-w-3xl mx-auto flex gap-2 relative">
-            <input value={input} onChange={e => setInput(e.target.value)} className="flex-1 bg-white px-5 py-4 rounded-xl outline-none text-sm font-light border border-zinc-200 focus:border-zinc-400 transition-all placeholder:text-zinc-400" placeholder="Digite sua mensagem..." disabled={isLoading}/>
-            <button type="submit" disabled={isLoading || !input.trim()} className="bg-zinc-900 text-white px-6 rounded-xl hover:bg-zinc-800 active:scale-95 transition-all disabled:opacity-50 flex items-center justify-center">
-              <Send size={18}/>
-            </button>
+        <footer className="fixed bottom-0 w-full p-6 bg-white/90 backdrop-blur-md border-t border-zinc-100">
+          <form onSubmit={e => { e.preventDefault(); processMessage(input); }} className="max-w-3xl mx-auto flex gap-3">
+            <input value={input} onChange={e => setInput(e.target.value)} placeholder="Digite sua mensagem..." className="flex-1 bg-white border border-zinc-200 p-4 rounded-2xl outline-none focus:border-zinc-900 transition-all text-sm font-light" />
+            <button type="submit" disabled={isLoading || !input.trim()} className="bg-zinc-900 text-white px-6 rounded-2xl hover:bg-zinc-800 transition-all"><Send size={18} /></button>
           </form>
         </footer>
       )}
